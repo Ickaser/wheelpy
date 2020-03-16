@@ -446,6 +446,13 @@ class calc:
                 return (vap - liq)
             P_sol = fsolve(sol_P, P_guess)[0]
         return P_sol
+
+    @staticmethod
+    def DIPPR_Psat(T, coeff):
+        A, B, C, D, E = coeff
+        T = T.to(un.K).magnitude
+        Y = np.exp(A + B/T + C*np.log(T) + D*T**E)
+        return Y*un.Pa
     
     @staticmethod
     def Bmix1(nFracs, Bvals):
@@ -476,12 +483,13 @@ class mixfit:
         """
         if curve_func == "Not Given":
             self.curve_func = self.default_curve
+            self.nParams=3
         else:
             self.curve_func = curve_func
             print("Warning: system is not currently set up to handle other curve fits.")
         self.M1 = M_arr[-1]
         self.M2 = M_arr[0]
-        self.fit, self.covar = curve_fit(self.M_nondim, x1_arr, M_arr.magnitude)
+        self.fit, self.covar = curve_fit(lambda x1, p: self.M_nondim(x1, *p), x1_arr, M_arr.magnitude, p0=np.zeros(self.nParams))
 
     @staticmethod
     def default_curve(x1, a, b, c):
@@ -489,9 +497,9 @@ class mixfit:
 
     # This function needs to have a function signature corresponding to the curve_func passed.
     # I would like to automate that better, perhaps with the help of curve_fit.
-    def M_nondim(self, x1, a, b, c):
+    def M_nondim(self, x1, param):
         x2 = 1-x1
-        return x1*self.M1.magnitude + x2*self.M2.magnitude + x1*x2*self.curve_func(x1, a, b, c)
+        return x1*self.M1.magnitude + x2*self.M2.magnitude + x1*x2*self.curve_func(x1, *param)
 
     @un.wraps("mL/mol", (None, ""), strict=False)
     def calc_M(self, x1):
@@ -502,12 +510,6 @@ class mixfit:
     def calc_M_id(self, x1):
         return self.M_id_nondim(x1)
     def dMdx_nondim(self, x1):
-        # u0 = M1.magnitude - M2.magnitude + a
-        # u1 = 2*b-2*a
-        # u2 = 3*c-3*b
-        # u3 = -4*c
-        # polycoeff = [u3, u2, u1, u0]
-        # return np.polyval(polycoeff, x1)
         return muc.ddx(lambda x: self.M_nondim(x, *self.fit), x1, .1)
     @un.wraps("mL/mol", (None, ""), strict=False)
     def calc_dMdx(self, x1):
@@ -517,13 +519,6 @@ class mixfit:
         dMdx = self.dMdx_nondim(x1)
         x2 = 1-x1
         return M + x2*dMdx
-        # u0 = M1.magnitude + a
-        # u1 = 2*b-2*a
-        # u2 = a-4*b+3*c
-        # u3 = 2*b-6*c
-        # u4 = 3*c
-        # polycoeff = [u4, u3, u2, u1, u0]
-        # return np.polyval(polycoeff, x1)
     @un.wraps("mL/mol", (None, ""), strict=False)
     def calc_M1b(self, x1):
         return self.M1b_nondim(x1)
@@ -532,16 +527,281 @@ class mixfit:
         dMdx = self.dMdx_nondim(x1)
         x2 = 1-x1
         return M - x1*dMdx
-        # u0 = M2.magnitude
-        # u1 = 0
-        # u2 = a-b
-        # u3 = 2*b-2*c
-        # u4 = 3*c
-        # polycoeff = [u4, u3, u2, u1, u0]
-        # return np.polyval(polycoeff, x1)
     @un.wraps("mL/mol", (None, ""), strict=False)
     def calc_M2b(self, x1):
         return self.M2b_nondim(x1)
 
 
+class vle:
+    def __init__(self, kind="baby", T="Not Given", P="Not Given"):
+        """
+        Class to handle binary VLE calculations. To generate a Txy diagram, pass P; for a Pxy diagram, pass T.
+        Allowed kinds are baby, teen, and adult (pass a string).
+        If using teen or adult, next call vle.set_act_model.
+        """
+        self.kind = kind
+        self.Tbool=True
+        self.Pbool=True
+        self.T = T
+        self.P = P
+        if self.T == "Not Given":
+            self.Tbool = False
+        if self.P == "Not Given":
+            self.Pbool = False
+        self.x1_arr = np.linspace(0, 1)
+
+        if self.kind == "baby":
+            self.calc_P = self.calc_P_baby
+        elif self.kind == "teen":
+            self.calc_P = self.calc_P_teen
+        elif self.kind == "adult":
+            self.calc_P = self.calc_P_adult
+        else:
+            raise ValueError("Incorrect VLE kind given. Should be 'baby', 'teen', or 'adult'.")
+
+    def set_Psat(self, func1, func2):
+        """
+        Takes two callables. Each should return Psat for the fluid.
+        Proper function signature: func(T) 
+        """
+        self.Psat1 = func1
+        self.Psat2 = func2
+            
+    def set_act_model(self, kind, params):
+        """
+        kind: 'mrg1', 'mrg2', or 'Wilson'.
+        params: tuple of parameters to unpack. 
+            For mrg1: A
+            For mrg2: A12, A21
+            For Wilson: a12, a21, V1, V2. L12 and L21 are computed by calc_gamma. (L for \Lambda)
+        No returns.
+        """
+        if self.kind == "baby":
+            print("Warning: Setting an unused activity model for VLE.")
+        self.act_kind = kind
+        if self.act_kind == "mrg1":
+            self.A = params
+        elif self.act_kind == "mrg2":
+            self.A12, self.A21 = params
+        elif self.act_kind == "Wilson":
+
+             self.V1, self.V2, self.a12, self.a21 = params
+    @staticmethod
+    def calc_Wilson_LL(V1, V2, a12, a21, T):
+        L12 = V2/V1 * np.exp(-a12/muc.R/T)
+        L21 = V1/V2 * np.exp(-a21/muc.R/T)
+        return L12, L21
+
+    def calc_gamma(self, x1, T="Not Given"):
+        """
+        Takes x1; returns (gam1, gam2).
+        For Wilson Equation VLE, also pass T.
+        """
+        x2 = 1-x1
+        if self.act_kind == "mrg1":
+            raise NotImplementedError("Margules 1-paramter is not implemented.")
+        elif self.act_kind == "mrg2":
+            gam1 = np.exp(x2*x2 * (self.A12 + 2*(self.A21 - self.A12)*x1))
+            gam2 = np.exp(x1*x1 * (self.A21 + 2*(self.A12 - self.A21)*x2))
+            return gam1, gam2
+        elif self.act_kind == "Wilson":
+            if T == "Not Given" and not self.Tbool:
+                raise ValueError("Wilson VLE needs a temperature for gamma.")
+            if T == "Not Given" and self.Tbool:
+                T = self.T
+            L12, L21 = self.calc_Wilson_LL(self.V1, self.V2, self.a12, self.a21, T)
+            der = (L12/(x1 + x2*L12) - L21/(x2 + x1*L21))
+            ret1 = x1 + x2*L12
+            ret2 = x2 + x1*L21
+            gam1 = np.exp(x2*der)/ret1
+            gam2 = np.exp(-x1*der)/ret2
+            return gam1, gam2
+        else:
+            raise ValueError("VLE object has an incorrect value of act_kind.")
+    def calc_GERT(self, x1):
+        x2 = 1-x1
+        gam1, gam2 = self.calc_gamma(x1, self.T)
+        return x1*np.log(gam1) + x2*np.log(gam2)
+
+    def calc_P_baby(self, x1, T, calc_y=False):
+        """
+        Takes x1 and T. Optional parameter calc_y=False.
+        If calc_y is True, also computes y1 and returns (P_tot, y1).
+        If calc_y is False, returns P_tot.
+        """
+        x2 = 1-x1
+        P1 = x1*self.Psat1(T)
+        P2 = x2*self.Psat2(T)
+        if calc_y:
+            return P1 + P2, P1/(P1 + P2)
+        else:
+            return P1 + P2
+    def calc_P_teen(self, x1, T, calc_y=False):
+        """
+        Takes x1 and T. Optional parameter calc_y=False.
+        If calc_y is True, also computes y1 and returns (P_tot, y1).
+        If calc_y is False, returns P_tot.
+        """
+        x2 = 1-x1
+        gam1, gam2 = self.calc_gamma(x1, T)
+        P1 = x1*self.Psat1(T) * gam1
+        P2 = x2*self.Psat2(T) * gam2
+        if calc_y:
+            return P1 + P2, P1/(P1 + P2)
+        else:
+            return P1 + P2
+
+    def calc_Pxy(self, numPoints=101, x1=.5, T="Not Given"):
+        if T == "Not Given" and not self.Tbool:
+            raise ValueError("Cannot perform Pxy calc without T. Either initialize VLE with one, or pass to calc_Pxy.")
+        elif T == "Not Given":
+            T = self.T
+        if numPoints == 1:
+            P, y1 = self.calc_P(x1, T, True)
+            return P, x1, y1
+        else:
+            x1_arr = np.linspace(0, 1, numPoints)
+            P_arr, y1_arr = self.calc_P(x1_arr, T, True)
+            return P_arr, x1_arr, y1_arr
+
+    # This function was, very mysteriously, crashing the Jupyter kernel without throwing any Python errors.
+    # The end result is that I run a single fsolve across the entire x1 array, instead of individually.
+    # I do not know why this works and the alternatives (commented out below) did not.
+    def calc_Txy(self, numPoints=101, x1=.5, P="Not Given"):
+        if P == "Not Given" and not self.Pbool:
+            raise ValueError("Cannot perform Txy calc without P. Either initialize VLE with one, or pass to calc_Txy.")
+        elif P == "Not Given":
+            P = self.P
+        Tguess = self.T if self.Tbool else 300*un.K
+        if numPoints == 1:
+            T = fsolve(lambda t: (self.calc_P(x1, t*Tguess.units, False) - P).magnitude, Tguess.magnitude)[0]*Tguess.units
+            P, y1 = self.calc_P(x1, T, True)
+            return T, x1, y1
+        else:
+            x1_arr = np.linspace(0, 1, numPoints)
+            T_arr = fsolve(lambda t: (self.calc_P(x1_arr, t*Tguess.units, False) - P).magnitude, x1_arr+Tguess.magnitude)*Tguess.units
+            P_arr, y1_arr = self.calc_P(x1_arr, T_arr, True)
+            return T_arr, x1_arr, y1_arr
+
+
+            # T_list = []
+            # P_list = []
+            # y_list = []
+            # for x1 in x1_arr:
+            #     T = fsolve(lambda t: (self.calc_P(x1, t*Tguess.units, False) - P).magnitude, Tguess.magnitude)[0]*Tguess.units
+            #     P, y1 = self.calc_P(x1, T, True)
+            #     T_list.append(T)
+            #     P_list.append(P)
+            #     y_list.append(y1)
+            # T_arr = muc.list_unit(T_list)
+            # P_arr = muc.list_unit(P_list)
+            # y1_arr = muc.list_unit(y_list)
+            # return T_arr, x1_arr, y1_arr
+                
+            # def sol_T(t, x1):
+            #     t *= Tguess.units
+            #     P_RHS = self.calc_P(x1, t, False)
+            #     return (P - P_RHS).magnitude
+            # T_arr = [fsolve(lambda t: sol_T(t, x1), Tguess.magnitude)[0]*Tguess.units for x1 in x1_arr]
+            # T_arr = muc.list_unit(T_arr)
+            # P_arr, y1_arr = self.calc_P(x1_arr, T_arr, True)
+            # return T_arr, x1_arr, y1_arr
+
+    def calc_bbl_yP(self, x1, guess, T="Not Given"):
+        """
+        Takes x1, a guess for the solver, and optionally a value of T to use in the calculation.
+        The guess has the form (y1, P), without any units attached.
+        Returns y1, P .
+        """
+        if T == "Not Given":
+            T = self.T
+        P, new_x, y1 = self.calc_Pxy(1, x1, T)
+        return y1, P
+    def calc_bbl_yT(self, x1, guess, P="Not Given"):
+        """
+        Takes x1, a guess for the solver, and optionally a value of P to use in the calculation.
+        The guess has the form (y1, T), without any units attached.
+        Returns y1, T.
+        """
+        if P == "Not Given":
+            P = self.P
+        T, new_x, y1 = self.calc_Txy(1, x1, P)
+        return y1, T
+
+    def calc_dew_xP(self, y1, guess, T="Not Given"):
+        """
+        Takes x1, a guess for the solver, and optionally a value of T to use in the calculation.
+        The guess has the form (y1, P), without any units attached.
+        Returns x1, P.
+        """
+        if T == "Not Given":
+            T = self.T
+        def sol_xP(x1P):
+            x1, P = x1P
+            P_RHS, y1_RHS = self.calc_P(x1, T, True)
+            eq1 = (P*P_RHS.units) - P_RHS 
+            eq2 = y1 - y1_RHS
+            return eq1.magnitude, eq2.magnitude
+        xP_sol = fsolve(sol_xP, guess)
+        x1 = xP_sol[0]
+        P = self.calc_P(x1, T, False)
+        err = sol_xP((x1, P.magnitude))
+        P_err = (err[0]*P.units) / P
+        y_err = (err[1])/y1
+        if np.abs(P_err.to("").magnitude) > .001 or np.abs(y_err) > .001:
+            print(f"Dew P calc error: {P_err.magnitude*100:.1f}% in P, {y_err*100:.1f}% in y")
+        # P = Px_sol[1]*P_RHS.units
+        return x1, P
+    def calc_dew_xT(self, y1, guess, P="Not Given"):
+        """
+        Takes x1, a guess for the solver, and optionally a value of T to use in the calculation.
+        The guess has the form (y1, P), without any units attached.
+        Returns x1, T.
+        """
+        if P == "Not Given":
+            P = self.P
+        def sol_xT(x1T):
+            x1, T = x1T
+            T *= un.K
+            P_RHS, y1_RHS = self.calc_P(x1, T, True)
+            eq1 = P - P_RHS
+            eq2 = y1 - y1_RHS
+            return eq1.magnitude, eq2.magnitude
+        xT_sol = fsolve(sol_xT, guess)
+        x1 = xT_sol[0]
+        T = xT_sol[1]*un.K
+        err = sol_xT((x1, T.magnitude))
+        T_err = (err[0]*P.units) / P
+        y_err = (err[1])/y1
+        if np.abs(T_err.to("").magnitude) > .001 or np.abs(y_err) > .001:
+            print(f"Dew T calc error: {T_err.magnitude*100:.1f}% in P, {y_err*100:.1f}% in y")
+        return x1, T
+
+    def calc_flash(self, z1, x_guess):
+        """
+        Uses the object's values of T and P to perform a flash calculation.
+        """
+        def sol_x(x):
+            P_RHS = self.calc_P(x, self.T, False)
+            eq1 = self.P - P_RHS
+            return eq1.magnitude
+        x1 = fsolve(sol_x, x_guess)[0]
+        P_RHS, y1 = self.calc_P(x1, self.T, True)
+        x2 = 1-x1
+        y2 = 1-y1
+        if not (x1<z1 and z1<y1) and not (y1<z1 and z1<x1):
+            print("Flash calculation found an unphysical x1 to get the right P: z1 is not between x1 and y1")
+        if x1 < 0 or x2 < 0 or y1 < 0 or y2 < 0:
+            print("Flash calculation found an unphysical x1 to get the right P.")
+            print(f"Calculated P: {P_RHS:.1f}")
+        l_frac = (z1-y1)/(x1-y1)
+        v_frac = 1-l_frac
+        ret = {
+               "l_comp":(x1,x2),
+               "v_comp":(y1.magnitude,y2.magnitude),
+               "l_frac":l_frac,
+               "v_frac":v_frac
+        }
+        return ret
+        
 
