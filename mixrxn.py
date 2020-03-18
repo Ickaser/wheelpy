@@ -18,45 +18,16 @@ class Mixture:
         self.initType = kind
         
         if self.initType == "mx":
-            
             self.mFrac = {}
             for u, i in zip(names, vals):
                 self.mFrac[u] = i
-            
             self.mFlows = {}
-        
         if self.initType == "mm":
-            
             self.mFlows = {}
             for u, i in zip(names, vals):
                 self.mFlows[u] = i
-                
             self.mFrac = {}
             
-            
-    # alternate constructor: for making alternate list
-    @classmethod
-    def SubMixture(cls, mixObj, ind):
-        """
-        Take one argument: list with object at 0, then tuple of indices to pull.
-        Designed to take mFlows and calculate fractions and total, so make sure object you pass is filled.
-        ex. [mixture1, (0, 1, 2)]
-        """
-        
-        
-        
-        impKeys = list(mixObj.mFlows.keys())
-        
-        mFlows = {}
-        for i in ind:
-            mFlows[impKeys[i]] = mixObj.mFlows[impKeys[i]]
-            
-        return cls(mFlows.keys(), mFlows.values(), kind = "mm")
-        
-#         self.mFrac = {}
-#         for i in self.mFlows.keys():
-#             self.mFrac[i] = self.mFlows[i] / self.mFlow
-         
                 
     def fill(self, molar = False, pint=True):
         """
@@ -141,6 +112,28 @@ class Mixture:
         self.fill()
 
 # -----------------------------------------
+    # alternate constructor: for making alternate list
+    @classmethod
+    def SubMixture(cls, mixObj, ind):
+        """
+        Takes two argument: Mixture object, then tuple of indices to pull.
+        Designed to take mFlows and calculate fractions and total, so make sure object you pass is filled.
+        ex. mixture1, (0, 1, 2)
+        """
+        impKeys = list(mixObj.mFlows.keys())
+        
+        mFlows = {}
+        for i in ind:
+            mFlows[impKeys[i]] = mixObj.mFlows[impKeys[i]]
+            
+        newObj = cls(mFlows.keys(), mFlows.values(), kind = "mm")
+        newObj.fill()
+        return newObj
+        
+#         self.mFrac = {}
+#         for i in self.mFlows.keys():
+#             self.mFrac[i] = self.mFlows[i] / self.mFlow
+         
              
     @staticmethod
     def solveMFlow(mix1, mix2, mixEnd, spec, known = "1"):
@@ -273,9 +266,9 @@ class Mixture:
         return sum(H)
 # --------------------
 
-    def compEnthalpy(self, mixT, CpCoeff, delHf0dict, Tref, kind=3, pint = False):
+    def compEnthalpy(self, T0, CpCoeff, delHf0dict, Tref, kind=3, pint = False):
         """
-        Arguments: mix, mixT, CpCoeff, delHf0dict, Tref
+        Arguments: mix, T0, CpCoeff, delHf0dict, Tref
         mix: a filled mixture
         mixtT: an input temperature, with units corresponding to CpCoeff equation
         CpCoeff: a dictionary by species name with Cp coefficients in ascending order
@@ -286,8 +279,8 @@ class Mixture:
         self.HbyS = {}
         for s in self.mFlows.keys():
             # print(delHf0dict[s])
-            # print(Mixture.DelCp(CpCoeff[s], Tref, mixT, kind, pint))
-            self.HbyS[s] = self.mFlows[s] * (delHf0dict[s] + Mixture.DelCp(CpCoeff[s], Tref, mixT, kind, pint) )
+            # print(Mixture.DelCp(CpCoeff[s], Tref, T0, kind, pint))
+            self.HbyS[s] = self.mFlows[s] * (delHf0dict[s] + Mixture.DelCp(CpCoeff[s], Tref, T0, kind, pint) )
         self.H = sum(self.HbyS.values())						
         return self.H
 
@@ -303,18 +296,19 @@ class Reaction:
         for i, s in enumerate(specs):
             self.nu[s] = nus[i]
 
-    def setCp_const(self, coeff):
+    def set_Cp_const(self, coeff):
         """
         Takes list of single coefficients, corresponding to constant Cp values for each species.
         Must be in same order as when reaction was set.
         """
         self.Cp = {}
         for s, c in zip(self.specs, coeff):
-            self.Cp[s] = [c]
+            self.Cp[s] = c
         self.Cp["kind"] = 1
         self.Cp["order"] = 1
+        self.Cp["const"] = True
 
-    def setCp_func(self, coeff_list, coeff_kind):
+    def set_Cp_func(self, coeff_list, coeff_kind):
         """
         Takes list of lists of coefficients, corresponding to Cp correlation for each species.
         Also requests kind of correlation: same kinds as for the mix.delCp function, which is used
@@ -332,15 +326,15 @@ class Reaction:
         self.Cp["kind"] = coeff_kind
         if self.Cp["kind"] == 1:
             self.Cp["order"] = len(self.Cp[self.names[0]])
+        self.Cp["const"] = False
 
 
-    def setHf(self, Hf_list):
+    def set_Hf(self, Hf_list):
         self.Hf = {}
         for s, h in zip(self.specs, Hf_list):
             self.Hf[s] = h
 
-    # Based on Mixture delCp function, 25/01/2020
-    def calc_Hrxn(self, Tref, T2,  pint_strip = False):
+    def calc_DH(self, spec, T1, T2, pint_strip = False):
         """
         Integrates C_p dT , for some common correlations.
         Arguments: T1, T2, pint_strip (bool).
@@ -349,24 +343,35 @@ class Reaction:
         kind 2: a + b*T + c*T**-2
         kind 3: a + b*T + c*T**2 + d*T**-2 (default)
         """
-        T1 = Tref  # laziness and shorthand
         if pint_strip:
             temp_unit = T1.units
             T1 = T1.magnitude
             T2 = T2.magnitude
-        if self.Cp["kind"] == 1:
+
+        if self.Cp["const"]:
+            Tarray = T2 - T1
+        elif self.Cp["kind"] == 1:
             Tarray = [(T2**i - T1**i)/i for i in range(1, self.Cp["order"]+1)]
         elif self.Cp["kind"] == 2:
             Tarray = [T2-T1, (T2*T2 - T1*T1)/2, (1/T2 - 1/T1)*-1]
         elif self.Cp["kind"] == 3:
             Tarray = [T2-T1, (T2*T2 - T1*T1)/2, (T2**3 - T1**3)/3, (1/T2 - 1/T1)*-1]
+
+        if self.Cp["const"]:
+            DH = Tarray * self.Cp[spec]
+        else:
+            DH = sum([t*c for t,c in zip(Tarray, self.Cp[spec])])
+        if pint_strip:
+            DH *= temp_unit
+        return DH
+
+
+    # Based on Mixture delCp function, 25/01/2020
+    def calc_Hrxn(self, Tref, T2,  pint_strip = False):
         H = {}
         self.H_Cp = {}
         for s in self.specs:
-            self.H_Cp[s] = sum([t*c for t,c in zip(Tarray, self.Cp[s]) ])
-            if pint_strip:
-                self.H_Cp[s] *= temp_unit
-            H[s] = self.nu[s] * (self.Hf[s] + self.H_Cp[s])
+            H[s] = self.nu[s] * (self.Hf[s] + self.calc_DH(s, Tref, T2))
         self.Hrxn = sum(H.values())
         return self.Hrxn
     
