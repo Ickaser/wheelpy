@@ -2,6 +2,61 @@
 import wheelpy.muc as muc
 un = muc.uReg
 
+class Species:
+    def __init__(self, name):
+        self.name = name
+
+    def set_Hf(self, Hf):
+        self.Hf = Hf
+
+    def set_Cp_const(self, Cp):
+        self.Cp = Cp
+        self.Cp_const = True
+
+    def set_Cp_func(self, coeff, coeff_kind):
+        self.Cp_kind = coeff_kind
+        if self.Cp_kind == 1 and len(coeff) > 4:
+                raise ValueError("Wrong number of coefficients")
+        elif self.Cp_kind == 2 and len(coeff) != 3:
+                raise ValueError("Wrong number of coefficients")
+        elif self.Cp_kind == 3 and len(coeff) != 4:
+                raise ValueError("Wrong number of coefficients")
+        self.Cp_coeff = coeff
+        self.Cp_kind = coeff_kind
+        if self.Cp_kind == 1:
+            self.Cp_order = len(self.Cp[self.names[0]])
+        self.Cp_const = False
+
+    def calc_DH(self, T1, T2, pint_strip = False):
+        """
+        Integrates C_p dT , for some common correlations.
+        Arguments: T1, T2, pint_strip (bool).
+        pint_strip indicates whether to strip units for temperature calc, always assumes in correct units
+        kind 1: degree <=3 polynomial, coefficients in rising order. 
+        kind 2: a + b*T + c*T**-2
+        kind 3: a + b*T + c*T**2 + d*T**-2 (default)
+        """
+        if pint_strip:
+            temp_unit = T1.units
+            T1 = T1.magnitude
+            T2 = T2.magnitude
+
+        if self.Cp_const:
+            Tarray = T2 - T1
+        elif self.Cp_kind == 1:
+            Tarray = [(T2**i - T1**i)/i for i in range(1, self.Cp["order"]+1)]
+        elif self.Cp_kind == 2:
+            Tarray = [T2-T1, (T2*T2 - T1*T1)/2, (1/T2 - 1/T1)*-1]
+        elif self.Cp_kind == 3:
+            Tarray = [T2-T1, (T2*T2 - T1*T1)/2, (T2**3 - T1**3)/3, (1/T2 - 1/T1)*-1]
+
+        if self.Cp_const:
+            DH = Tarray * self.Cp
+        else:
+            DH = sum([t*c for t,c in zip(Tarray, self.Cp_coeff)])
+        if pint_strip:
+            DH *= temp_unit
+        return DH
 
 class Mixture:
     
@@ -14,19 +69,32 @@ class Mixture:
         
         self.names = names
         self.vals = vals
-        self.mFlow = mFlow
         self.initType = kind
+        self.mFrac = {}
+        self.mFlows = {}
+        self.nFrac = {}
+        self.nFlows = {}
         
         if self.initType == "mx":
-            self.mFrac = {}
             for u, i in zip(names, vals):
                 self.mFrac[u] = i
-            self.mFlows = {}
-        if self.initType == "mm":
-            self.mFlows = {}
+            self.mFlow = mFlow
+        elif self.initType == "mm":
             for u, i in zip(names, vals):
                 self.mFlows[u] = i
-            self.mFrac = {}
+            self.mFlow = mFlow
+        elif self.initType == "nx":
+            for u, i in zip(names, vals):
+                self.nFrac[u] = i
+            self.nFlow = mFlow
+        elif self.initType == "nn":
+            for u, i in zip(names, vals):
+                self.nFlows[u] = i
+            self.nFlow = mFlow
+
+        self.s = {}
+        for n in self.names:
+            self.s[n] = Species(n)
             
                 
     def fill(self, molar = False, pint=True):
@@ -39,40 +107,26 @@ class Mixture:
         """
         
         # -----------------------------
+        trueType = self.initType
+        changedType = False
+        if self.initType == "nx" or self.initType == "nn":
+            self.from_molar()
+            changedType = True
         if self.initType == "mm":
             
             # compute total flow if necessary
             if self.mFlow == None:
                 self.mFlow = sum(self.mFlows.values()) 
-                
             # compute an individual mass flow if necessary
             else: 
                 for i in self.mFlows.keys():
                     if self.mFlows[i] == None:
                         self.mFlows[i] = self.mFlow - sum(filter(None, self.mFlows.values()))
-                        
-                        
            # compute mass fractions 
-            self.mFrac = {}
             for u, i in zip(self.mFlows.keys(), self.mFlows.values()):
                 self.mFrac[u] = i / self.mFlow
-                
-
-            # compute molar weights, then flows, then fractions
-            if molar:
-                self.MW = {}
-                self.nFlows = {}
-                for s in self.mFlows.keys():
-                    self.MW[s] = periodicTable.MW(s)
-                    if pint: 
-                        self.MW[s]*=un.g/un.mol
-                    self.nFlows[s] = self.mFlows[s] / self.MW[s]
-                self.nFlow = sum(self.nFlows.values())
-                self.nFrac = {}
-                for s in self.mFlows.keys():
-                    self.nFrac[s] = self.nFlows[s] / self.nFlow
         # -----------------------------
-        if self.initType == "mx":
+        elif self.initType == "mx":
 
             # compute an individual mass fraction if necessary
             for i in self.names:
@@ -81,36 +135,42 @@ class Mixture:
                     break
                     
             # compute mass flow rates by species
-            self.mFlows = {}
             for i in self.names:
                 self.mFlows[i] = self.mFrac[i] * self.mFlow
                 
- 
-            # compute molar weights, then flows, then fractions
-            if molar:
-                self.MW = {}
-                self.nFlows = {}
-                for s in self.mFlows.keys():
-                    self.MW[s] = periodicTable.MW(s)
-                    if pint: 
-                        self.MW[s]*=un.g/un.mol
-                    self.nFlows[s] = self.mFlows[s] / self.MW[s]
-                self.nFlow = sum(self.nFlows.values())
-                self.nFrac = {}
-                for s in self.mFlows.keys():
-                    self.nFrac[s] = self.nFlows[s] / self.nFlow           
+        # compute molar weights, then flows, then fractions
+        if molar and (self.initType=="mx" or self.initType=="mm"):
+            self.MW = {}
+            for s in self.mFlows.keys():
+                self.MW[s] = periodicTable.MW(s)
+                if pint: 
+                    self.MW[s]*=un.g/un.mol
+                self.nFlows[s] = self.mFlows[s] / self.MW[s]
+            self.nFlow = sum(self.nFlows.values())
+            self.nFrac = {}
+            for s in self.mFlows.keys():
+                self.nFrac[s] = self.nFlows[s] / self.nFlow           
+        if changedType:
+            self.initType = trueType
 
     #--------------------
 
-    def fromMolar(self):
-        self.nFlow = sum(self.nFlows.values())
+    def from_molar(self):
+        if self.initType == "nx":
+            names = self.names
+            for n in names:
+                self.nFlows[n] = self.nFrac[n]*self.nFlow
+        elif self.initType == "nn":
+            names = self.names
+            self.nFlow = sum(self.nFlows.values())
+            for n in names:
+                self.nFrac[n] = self.nFlows[n]/self.nFlow
         self.MW = {}
         for s in self.nFlows.keys():
             self.MW[s] = periodicTable.MW(s)
             self.mFlows[s] = self.nFlows[s] * self.MW[s]
-        self.kind = "mm"
-        self.fill()
-
+        self.mFlow = None
+        self.initType = "mm"
 # -----------------------------------------
     # alternate constructor: for making alternate list
     @classmethod
@@ -147,22 +207,8 @@ class Mixture:
         elif known == "end":
             mix1.mFlow = (mixEnd.mFlow*mixEnd.mFrac[spec] - mixEnd.mFlow*mix2.mFrac[spec])/(mix1.mFrac[spec] - mix2.mFrac[spec])
             mix2.mFlow = mixEnd.mFlow - mix1.mFlow
-
                     
 # ---------------------------------------------
-    def print(self, dec = 3, mm = False):
-        """
-        Prints out the mFlow, then the mass fractions.
-        Alternatively, print out the mFlows by passing True.
-        Pass dec = # to change number of decimals printed.
-        """
-        
-        if mm:
-            print(self.mFlows)
-        else:
-            for s in self.mFrac.keys():
-                print(f"{s}: {self.mFrac[s]:.{dec}f}, ", end = "")
-            print(f"total flow: {self.mFlow:.{dec}f}")
 
     def Convert(self, rxn, spec, X):
         """
@@ -230,156 +276,125 @@ class Mixture:
             return newMix
         else:
             print("You subtracted something else from a mixture.")
-								 
 #---------------------------
-								 
-    @staticmethod
-    def DelCp(coeff, T1, T2, kind = 3, pint = False):
-        """
-        Integrates C_p dT , for two common models.
-        Arguments: coefficients, T1, T2, kind (1 or 2), units (bool).
-        coefficients is an iterable with indices; pint indicates whether to strip units, always assumes in correct units
-        kind 1: degree <=3 polynomial, coefficients in rising order. 
-        kind 2: a + b*T + c/T**2
-        kind 3: a + b*T + c*T**2 + d*T**-2 (default)
-        """
-        if pint:
-            temp_unit = T1.units
-            T1 = T1.magnitude
-            T2 = T2.magnitude
-        if kind == 1:
-            if len(coeff) > 4:
-                raise ValueError("Wrong number of coefficients")
-            Tarray = [(T2**i - T1**i)/i for i in range(1, len(coeff)+1)]
-        elif kind == 2:
-            if len(coeff) != 3:
-                raise ValueError("Wrong number of coefficients")
-            Tarray = [T2-T1, (T2*T2 - T1*T1)/2, (1/T2 - 1/T1)*-1]
-        elif kind == 3:
-            if len(coeff) != 4:
-                raise ValueError("Wrong number of coefficients")
-            Tarray = [T2-T1, (T2*T2 - T1*T1)/2, (T2**3 - T1**3)/3, (1/T2 - 1/T1)*-1]
-        H = [Tarray[i] * coeff[i] for i in range(len(Tarray))]
-        # print(H)
-        if pint:
-            H = [h * temp_unit for h in H]
-        return sum(H)
-# --------------------
+    def set_Hf(self, Hf_list):
+        for n, h in zip(self.names, Hf_list):
+            self.s[n].set_Hf(h) 
 
-    def compEnthalpy(self, T0, CpCoeff, delHf0dict, Tref, kind=3, pint = False):
-        """
-        Arguments: mix, T0, CpCoeff, delHf0dict, Tref
-        mix: a filled mixture
-        mixtT: an input temperature, with units corresponding to CpCoeff equation
-        CpCoeff: a dictionary by species name with Cp coefficients in ascending order
-        delHf0dict: a dictionary by species name of standard heats of formation
-        Tref: reference temperature (either 25 or 298.15 depending on C or K)
-        """
-        # print(CpCoeff)
-        self.HbyS = {}
-        for s in self.mFlows.keys():
-            # print(delHf0dict[s])
-            # print(Mixture.DelCp(CpCoeff[s], Tref, T0, kind, pint))
-            self.HbyS[s] = self.mFlows[s] * (delHf0dict[s] + Mixture.DelCp(CpCoeff[s], Tref, T0, kind, pint) )
-        self.H = sum(self.HbyS.values())						
-        return self.H
-
-# -------------------------------------------------------------
-    
-class Reaction:
-    def __init__(self, specs, nus):
-        """
-        Takes list of stoich. coefficients and list of species names. Stores values.
-        """
-        self.specs = specs
-        self.nu = {}
-        for i, s in enumerate(specs):
-            self.nu[s] = nus[i]
-
-    def set_Cp_const(self, coeff):
+    def set_Cp_const(self, Cp):
         """
         Takes list of single coefficients, corresponding to constant Cp values for each species.
         Must be in same order as when reaction was set.
+        Wraps the Species function of the same name.
         """
-        self.Cp = {}
-        for s, c in zip(self.specs, coeff):
-            self.Cp[s] = c
-        self.Cp["kind"] = 1
-        self.Cp["order"] = 1
-        self.Cp["const"] = True
+        for n, c in zip(self.names, Cp):
+            self.s[n].set_Cp_const(c)
 
     def set_Cp_func(self, coeff_list, coeff_kind):
         """
         Takes list of lists of coefficients, corresponding to Cp correlation for each species.
-        Also requests kind of correlation: same kinds as for the mix.delCp function, which is used
         Must be in same order as when reaction was set.
-        """
-        self.Cp = {"kind":coeff_kind}
-        for s, coeff in zip(self.specs, coeff_list):
-            if self.Cp["kind"] == 1 and len(coeff) > 4:
-                    raise ValueError("Wrong number of coefficients")
-            elif self.Cp["kind"] == 2 and len(coeff) != 3:
-                    raise ValueError("Wrong number of coefficients")
-            elif self.Cp["kind"] == 3 and len(coeff) != 4:
-                    raise ValueError("Wrong number of coefficients")
-            self.Cp[s] = coeff
-        self.Cp["kind"] = coeff_kind
-        if self.Cp["kind"] == 1:
-            self.Cp["order"] = len(self.Cp[self.names[0]])
-        self.Cp["const"] = False
-
-
-    def set_Hf(self, Hf_list):
-        self.Hf = {}
-        for s, h in zip(self.specs, Hf_list):
-            self.Hf[s] = h
-
-    def calc_DH(self, spec, T1, T2, pint_strip = False):
-        """
-        Integrates C_p dT , for some common correlations.
-        Arguments: T1, T2, pint_strip (bool).
-        pint_strip indicates whether to strip units for temperature calc, always assumes in correct units
+        Wraps Species function of the same name.
         kind 1: degree <=3 polynomial, coefficients in rising order. 
         kind 2: a + b*T + c*T**-2
         kind 3: a + b*T + c*T**2 + d*T**-2 (default)
         """
-        if pint_strip:
-            temp_unit = T1.units
-            T1 = T1.magnitude
-            T2 = T2.magnitude
+        names = self.names
+        for n, c in zip(names, coeff_list):
+            self.s[n].set_Cp_func(c, coeff_kind) 
 
-        if self.Cp["const"]:
-            Tarray = T2 - T1
-        elif self.Cp["kind"] == 1:
-            Tarray = [(T2**i - T1**i)/i for i in range(1, self.Cp["order"]+1)]
-        elif self.Cp["kind"] == 2:
-            Tarray = [T2-T1, (T2*T2 - T1*T1)/2, (1/T2 - 1/T1)*-1]
-        elif self.Cp["kind"] == 3:
-            Tarray = [T2-T1, (T2*T2 - T1*T1)/2, (T2**3 - T1**3)/3, (1/T2 - 1/T1)*-1]
+    def calc_H(self, T, Tref, pint_strip = True):
+        """
+        Arguments: T, Tref, pint_strip
+        T: mixture temperature, with proper units for type of Cp correlation
+        Tref: reference temperature for heats of formation
+        pint_strip: defaults to True. If True, strips pint-style units from temperatures before using Cp correlation.
+        Returns total H of mixture, referenced to pure species at reference temperature. Also stored as self.H.
+        """
+        self.H_by_spec = {}
+        for n in self.mFlows.keys():
+            self.H_by_spec[n] = self.mFlows[n] * (self.s[n].Hf + self.s[n].calc_DH(Tref, T, pint_strip) )
+        self.H = sum(self.H_by_spec.values())						
+        return self.H
+# -------------------------------------------------------------
+    def print(self, kind = None, dec = 3):
+        """
+        Prints out one type of the values stored. 
+        Optional arguments: kind, dec, pint_strip
+        kind: kind of values to print. 'nn', 'mm', 'nx', or 'mx'. Defaults to type initialized with mixture.
+        dec: decimal points to print. Defaults to 3.
+        """
+        if kind == None:
+            kind = self.initType
+        if kind == "mx":
+            for s in self.mFrac.keys():
+                print(f"{s}: {self.mFrac[s]:.{dec}f}, ", end = "")
+            print(f"total flow: {self.mFlow:.{dec}f}")
+        elif kind == "nx":
+            for s in self.mFrac.keys():
+                print(f"{s}: {self.nFrac[s]:.{dec}f}, ", end = "")
+            print(f"total flow: {self.nFlow:.{dec}f}")
+        elif kind == "mm":
+            for s in self.mFrac.keys():
+                print(f"{s}: {self.mFlows[s]:.{dec}f}, ", end = "")
+            print(f"total flow: {self.mFlow:.{dec}f}")
+        elif kind == "nn":
+            for s in self.mFrac.keys():
+                print(f"{s}: {self.nFlows[s]:.{dec}f}, ", end = "")
+            print(f"total flow: {self.nFlow:.{dec}f}")
 
-        if self.Cp["const"]:
-            DH = Tarray * self.Cp[spec]
-        else:
-            DH = sum([t*c for t,c in zip(Tarray, self.Cp[spec])])
-        if pint_strip:
-            DH *= temp_unit
-        return DH
+class Reaction:
+    def __init__(self, names, nus):
+        """
+        Takes list of stoich. coefficients and list of species names. Stores values.
+        """
+        self.names = names
+        self.s = {}
+        self.nu = {}
+        for i, n in enumerate(names):
+            self.s[n] = Species(n)
+            self.nu[n] = nus[i]
 
+    def set_Hf(self, Hf_list):
+        for n, h in zip(self.names, Hf_list):
+            self.s[n].set_Hf(h) 
 
-    # Based on Mixture delCp function, 25/01/2020
+    def set_Cp_const(self, Cp):
+        """
+        Takes list of single coefficients, corresponding to constant Cp values for each species.
+        Must be in same order as when reaction was set.
+        Wraps the Species function of the same name.
+        """
+        for n, c in zip(self.names, Cp):
+            self.s[n].set_Cp_const(c)
+
+    def set_Cp_func(self, coeff_list, coeff_kind):
+        """
+        Takes list of lists of coefficients, corresponding to Cp correlation for each species.
+        Must be in same order as when reaction was set.
+        Wraps Species function of the same name.
+        kind 1: degree <=3 polynomial, coefficients in rising order. 
+        kind 2: a + b*T + c*T**-2
+        kind 3: a + b*T + c*T**2 + d*T**-2 (default)
+        """
+        names = self.names
+        for n, c in zip(names, coeff_list):
+            self.s[n].set_Cp_func(c, coeff_kind) 
+
+    def calc_H0rxn(self):
+        self.H0rxn = 0
+        for n in self.names:
+            self.H0rxn += self.nu[n] * self.s[n].Hf
+        return self.H0rxn
     def calc_Hrxn(self, Tref, T2,  pint_strip = False):
-        H = {}
-        self.H_Cp = {}
-        for s in self.specs:
-            H[s] = self.nu[s] * (self.Hf[s] + self.calc_DH(s, Tref, T2))
-        self.Hrxn = sum(H.values())
+        self.Hrxn = self.calc_H0rxn()
+        for n in self.names:
+            self.Hrxn += self.nu[n] * self.s[n].calc_DH(Tref, T2)
         return self.Hrxn
     
 
                                  
 # -------------------------------------------------------------
-# class Energy:
-								 
 								 
 		
 # -----------------------------------------------------------------
