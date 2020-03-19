@@ -234,7 +234,9 @@ class Mixture:
         newMix = {}
         for s in spec:
             newMix[s] = self.mFlows[s]
-        return Mixture(newMix.keys(), newMix.values(), kind = "mm")
+        newObj = Mixture(newMix.keys(), newMix.values(), kind = "mm")
+        newObj.fill()
+        return newObj
     
     def Separate(self, spec):
         """
@@ -245,7 +247,9 @@ class Mixture:
         for s in self.mFlows.keys():
             if s not in spec:
                 newMix[s] = self.mFlows[s]
-        return Mixture(newMix.keys(), newMix.values(), kind = "mm")
+        newObj = Mixture(newMix.keys(), newMix.values(), kind = "mm")
+        newObj.fill()
+        return newObj
     
     def __add__(self, other):
         if isinstance(other, Mixture):
