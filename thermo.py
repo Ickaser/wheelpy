@@ -6,6 +6,18 @@ from scipy.integrate import quad
 import numpy as np
 
 class EOS:
+    """
+    Initialize the object:
+    obj = EOS(kind, T, P, Tc, Pc, omega, pint=True)
+    Then, call:
+    obj.calc_Z()
+    Afterwards, other functions are available: (if root is an argument, pass "liq" or "vap")
+    obj.calc_V(root="all")
+    obj.calc_fugacity(root="vap")
+    obj.calc_residG(root="liq")
+    obj.calc_residSH()
+
+    """
 
     def __init__(self, kind, T, P, Tc, Pc, omega, pint=True):
         """
@@ -531,6 +543,62 @@ class mixfit:
     def calc_M2b(self, x1):
         return self.M2b_nondim(x1)
 
+class Activity:
+    def __init__(self, kind, params):
+        """
+        kind: 'mrg1', 'mrg2', or 'Wilson'.
+        params: tuple of parameters to unpack. 
+            For mrg1: A
+            For mrg2: A12, A21
+            For Wilson: a12, a21, V1, V2. L12 and L21 are computed by calc_gamma. (L for \Lambda)
+        No returns.
+        """
+        self.kind = kind
+        if self.kind == "mrg1":
+            self.A = params
+        elif self.kind == "mrg2":
+            self.A12, self.A21 = params
+        elif self.kind == "Wilson":
+             self.V1, self.V2, self.a12, self.a21 = params
+
+    @staticmethod
+    def calc_Wilson_LL(V1, V2, a12, a21, T):
+        L12 = V2/V1 * np.exp(-a12/muc.R/T)
+        L21 = V1/V2 * np.exp(-a21/muc.R/T)
+        return L12, L21
+
+    def calc_gamma(self, x1, T="Not Given"):
+        """
+        Takes x1 and optionally T; returns (gam1, gam2).
+        T required for Wilson equation; not used for Margules.
+        """
+        x2 = 1-x1
+        if self.kind == "mrg1":
+            raise NotImplementedError("Margules 1-paramter is not implemented.")
+        elif self.kind == "mrg2":
+            gam1 = np.exp(x2*x2 * (self.A12 + 2*(self.A21 - self.A12)*x1))
+            gam2 = np.exp(x1*x1 * (self.A21 + 2*(self.A12 - self.A21)*x2))
+            return gam1, gam2
+        elif self.kind == "Wilson":
+            if T == "Not Given" and not self.Tbool:
+                raise ValueError("Wilson VLE needs a temperature for gamma.")
+            if T == "Not Given" and self.Tbool:
+                T = self.T
+            L12, L21 = self.calc_Wilson_LL(self.V1, self.V2, self.a12, self.a21, T)
+            der = (L12/(x1 + x2*L12) - L21/(x2 + x1*L21))
+            ret1 = x1 + x2*L12
+            ret2 = x2 + x1*L21
+            gam1 = np.exp(x2*der)/ret1
+            gam2 = np.exp(-x1*der)/ret2
+            return gam1, gam2
+        else:
+            raise ValueError("Activity object has an incorrect value of kind.")
+
+    def calc_GERT(self, x1):
+        x2 = 1-x1
+        gam1, gam2 = self.act.calc_gamma(x1, self.T)
+        return x1*np.log(gam1) + x2*np.log(gam2)
+
 
 class vle:
     def __init__(self, kind="baby", T="Not Given", P="Not Given"):
@@ -575,53 +643,12 @@ class vle:
             For mrg2: A12, A21
             For Wilson: a12, a21, V1, V2. L12 and L21 are computed by calc_gamma. (L for \Lambda)
         No returns.
+        Wraps the Activity initialization function, and calls it self.act.
         """
         if self.kind == "baby":
             print("Warning: Setting an unused activity model for VLE.")
         self.act_kind = kind
-        if self.act_kind == "mrg1":
-            self.A = params
-        elif self.act_kind == "mrg2":
-            self.A12, self.A21 = params
-        elif self.act_kind == "Wilson":
-
-             self.V1, self.V2, self.a12, self.a21 = params
-    @staticmethod
-    def calc_Wilson_LL(V1, V2, a12, a21, T):
-        L12 = V2/V1 * np.exp(-a12/muc.R/T)
-        L21 = V1/V2 * np.exp(-a21/muc.R/T)
-        return L12, L21
-
-    def calc_gamma(self, x1, T="Not Given"):
-        """
-        Takes x1; returns (gam1, gam2).
-        For Wilson Equation VLE, also pass T.
-        """
-        x2 = 1-x1
-        if self.act_kind == "mrg1":
-            raise NotImplementedError("Margules 1-paramter is not implemented.")
-        elif self.act_kind == "mrg2":
-            gam1 = np.exp(x2*x2 * (self.A12 + 2*(self.A21 - self.A12)*x1))
-            gam2 = np.exp(x1*x1 * (self.A21 + 2*(self.A12 - self.A21)*x2))
-            return gam1, gam2
-        elif self.act_kind == "Wilson":
-            if T == "Not Given" and not self.Tbool:
-                raise ValueError("Wilson VLE needs a temperature for gamma.")
-            if T == "Not Given" and self.Tbool:
-                T = self.T
-            L12, L21 = self.calc_Wilson_LL(self.V1, self.V2, self.a12, self.a21, T)
-            der = (L12/(x1 + x2*L12) - L21/(x2 + x1*L21))
-            ret1 = x1 + x2*L12
-            ret2 = x2 + x1*L21
-            gam1 = np.exp(x2*der)/ret1
-            gam2 = np.exp(-x1*der)/ret2
-            return gam1, gam2
-        else:
-            raise ValueError("VLE object has an incorrect value of act_kind.")
-    def calc_GERT(self, x1):
-        x2 = 1-x1
-        gam1, gam2 = self.calc_gamma(x1, self.T)
-        return x1*np.log(gam1) + x2*np.log(gam2)
+        self.act = Activity(self.act_kind, params)
 
     def calc_P_baby(self, x1, T, calc_y=False):
         """
@@ -643,7 +670,7 @@ class vle:
         If calc_y is False, returns P_tot.
         """
         x2 = 1-x1
-        gam1, gam2 = self.calc_gamma(x1, T)
+        gam1, gam2 = self.act.calc_gamma(x1, T)
         P1 = x1*self.Psat1(T) * gam1
         P2 = x2*self.Psat2(T) * gam2
         if calc_y:
@@ -804,4 +831,33 @@ class vle:
         }
         return ret
         
+class lle:
+    def __init__(self, act_kind, act_params):
+        self.act_kind = act_kind
+        self.act_params = act_params
+        self.act = Activity(self.act_kind, self.act_params)
+    
+    def calc_equilibrium(self, guess=(.1, .9), T="Not Given"):
+        """
+        Takes guess and optionally T.
+        Guess has form (x1a, x1b).
+        Returns x1a, x1b.
+        """
+        if T=="Not Given" and self.act_kind == "Wilson":
+            raise ValueError("For Wilson activity, need a given temperature.")
+        def sol_eqs(x1ab):
+            x1a, x1b = x1ab
+            gam1a, gam2a = self.act.calc_gamma(x1a, T)
+            gam1b, gam2b = self.act.calc_gamma(x1b, T)
+            x2a = 1-x1a
+            x2b = 1-x1b
+            eq1 = x1a*gam1a - x1b*gam1b
+            eq2 = x2a*gam2a - x2b*gam2b
+            return eq1, eq2
+        x1a, x1b = fsolve(sol_eqs, guess)
+        if (x1a < 0) or (x1a > 1) or (x1b<0) or (x1b>1):
+            print("Solver found an unphysical x1a or x1a:", x1a, x1b)
+        return x1a, x1b
+        
+
 

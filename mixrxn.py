@@ -107,6 +107,7 @@ class Mixture:
         """
         
         # -----------------------------
+        self.molar_fill = molar
         trueType = self.initType
         changedType = False
         if self.initType == "nx" or self.initType == "nn":
@@ -142,9 +143,7 @@ class Mixture:
         if molar and (self.initType=="mx" or self.initType=="mm"):
             self.MW = {}
             for s in self.mFlows.keys():
-                self.MW[s] = periodicTable.MW(s)
-                if pint: 
-                    self.MW[s]*=un.g/un.mol
+                self.MW[s] = periodicTable.MW(s, pint=pint)
                 self.nFlows[s] = self.mFlows[s] / self.MW[s]
             self.nFlow = sum(self.nFlows.values())
             self.nFrac = {}
@@ -225,6 +224,43 @@ class Mixture:
         newMix = Mixture(names, newFlows, kind = "mm")
         newMix.fill()
         return newMix
+
+    def Bin_sep(self, x1, y1, spec, molar=False):
+        """
+        Takes two fractions and the name of the reference species.
+        Assumes a binary mixture.
+        Returns two new objects, which satisfy a mole balance on the reference species.
+        Object order matches the fraction order passed
+        (Algorithm derived from flash calculation, and therefore uses L and V notation.)
+        """
+        if len(self.names) != 2:
+            raise ValueError("Not a binary mixture.")
+        x2 = 1-x1
+        y2 = 1-y1
+        if molar:
+            z1 = self.nFrac[spec]
+            m1 = self.nFlow
+        else:
+            z1 = self.mFrac[spec]
+            m1 = self.mFlow
+        frac_l = (z1-y1)/(x1-y1)
+        frac_v = (z1-x1)/(y1-x1)
+        names = self.names
+        ml = m1*frac_l
+        mv = m1*frac_v
+        
+        if molar:
+            l = Mixture(names, (x1, x2), ml, kind="nx")
+            l.fill(self.molar_fill)
+            v = Mixture(names, (y1, y2), mv, kind="nx")
+            v.fill(self.molar_fill)
+        else:
+            l = Mixture(names, (x1, x2), ml, kind="mx")
+            l.fill(self.molar_fill)
+            v = Mixture(names, (y1, y2), mv, kind="mx")
+            v.fill(self.molar_fill)
+        return l, v
+
                 
     def Extract(self, spec):
         """
@@ -238,7 +274,7 @@ class Mixture:
         newObj.fill()
         return newObj
     
-    def Separate(self, spec):
+    def Remove(self, spec):
         """
         Takes an iterable of species names.
         Returns a new mixture, based on the mFlows, without the species given as arguments.
