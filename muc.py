@@ -3,9 +3,9 @@ import pint
 import numpy as np
 
 uReg = pint.UnitRegistry()
-uReg.ndim = uReg.dimensionless
 uReg.define("ppm=mg/kg")
 uReg.define("cm1 = 1/cm")
+uReg.ndim = uReg.dimensionless
 
 c = 2.998E8 * uReg.m/uReg.s
 h = 6.626E-34 *uReg.m*uReg.m/uReg.s*uReg.kg
@@ -72,6 +72,18 @@ def EE(fun, t_arr, y0, vec=True):
             y_all.append(y_new)
             y_vars = list_unit(y_all)[:-1]
     return y_vars
+
+def ivp_wrapper(ivp, y_dim, t_unit):
+    y_unit = [y.units for y in y_dim]
+    ret1 = ivp(0*t_unit, y_dim)
+    def new_ivp(t, y_ndim):
+        y_dim = [n * u for n, u in zip(y_ndim, y_unit)]
+        step = ivp(t, y_dim)
+        ret = [s.to(u/t_unit).magnitude for s, u in zip(step, y_unit)]
+        return ret
+    y_ndim = [y.magnitude for y in y_dim]
+    return new_ivp, y_ndim
+
 
 # -----------------------------
 # Dr. Knott's property files

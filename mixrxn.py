@@ -343,17 +343,21 @@ class Mixture:
         for n, c in zip(names, coeff_list):
             self.s[n].set_Cp_func(c, coeff_kind) 
 
-    def calc_H(self, T, Tref, pint_strip = True):
+    def calc_H(self, T, Tref, use_Hf, pint_strip = True):
         """
         Arguments: T, Tref, pint_strip
         T: mixture temperature, with proper units for type of Cp correlation
         Tref: reference temperature for heats of formation
         pint_strip: defaults to True. If True, strips pint-style units from temperatures before using Cp correlation.
-        Returns total H of mixture, referenced to pure species at reference temperature. Also stored as self.H.
+        Returns total H of mixture, referenced to reference temperature of Hf values. Also stored as self.H.
         """
         self.H_by_spec = {}
-        for n in self.mFlows.keys():
-            self.H_by_spec[n] = self.mFlows[n] * (self.s[n].Hf + self.s[n].calc_DH(Tref, T, pint_strip) )
+        if use_Hf:
+            for n in self.mFlows.keys():
+                self.H_by_spec[n] = self.mFlows[n] * (self.s[n].Hf + self.s[n].calc_DH(Tref, T, pint_strip) )
+        else:
+            for n in self.mFlows.keys():
+                self.H_by_spec[n] = self.mFlows[n] * (self.s[n].calc_DH(Tref, T, pint_strip) )
         self.H = sum(self.H_by_spec.values())						
         return self.H
 # -------------------------------------------------------------
@@ -395,9 +399,18 @@ class Reaction:
             self.s[n] = Species(n)
             self.nu[n] = nus[i]
 
-    def set_Hf(self, Hf_list):
+    def set_Hf(self, Hf_list, Tref):
         for n, h in zip(self.names, Hf_list):
             self.s[n].set_Hf(h) 
+        self.Tref = Tref
+
+    def set_H0rxn(self, H0rxn, Tref):
+        # Kludge. Set the heat of formation of one reactant equal to heat of reaction, all else to zero
+        Hf_list = [0*H0rxn.units for n in self.names]
+        Hf_list[0] = H0rxn/self.nu[self.names[0]]
+        self.set_Hf(Hf_list, Tref)
+
+        self.Tref = Tref
 
     def set_Cp_const(self, Cp):
         """
@@ -426,15 +439,20 @@ class Reaction:
         for n in self.names:
             self.H0rxn += self.nu[n] * self.s[n].Hf
         return self.H0rxn
-    def calc_Hrxn(self, Tref, T2,  pint_strip = False):
-        self.Hrxn = self.calc_H0rxn()
+
+    def calc_Hrxn(self, T, Tref="Not Given", pint_strip = False):
+        try:
+            self.Hrxn = self.H0rxn
+        except:
+            self.Hrxn = self.calc_H0rxn()
+        if Tref == "Not Given":
+            Tref = self.Tref
         for n in self.names:
-            self.Hrxn += self.nu[n] * self.s[n].calc_DH(Tref, T2)
+            self.Hrxn += self.nu[n] * self.s[n].calc_DH(Tref, T)
         return self.Hrxn
     
 
                                  
-# -------------------------------------------------------------
 								 
 		
 # -----------------------------------------------------------------

@@ -546,20 +546,26 @@ class mixfit:
 class Activity:
     def __init__(self, kind, params):
         """
-        kind: 'mrg1', 'mrg2', or 'Wilson'.
+        kind: 'mrg1', 'mrg2', 'Wilson', 'vanLaar'
         params: tuple of parameters to unpack. 
             For mrg1: A
             For mrg2: A12, A21
             For Wilson: a12, a21, V1, V2. L12 and L21 are computed by calc_gamma. (L for \Lambda)
+            For vanLaar: A12', A21'
         No returns.
         """
         self.kind = kind
+        self.args = (kind, params)
         if self.kind == "mrg1":
             self.A = params
         elif self.kind == "mrg2":
             self.A12, self.A21 = params
         elif self.kind == "Wilson":
-             self.V1, self.V2, self.a12, self.a21 = params
+            self.V1, self.V2, self.a12, self.a21 = params
+        elif self.kind == "vanLaar":
+            self.A12p, self.A21p = params
+        else:
+            raise ValueError("Invalid type of activity model.")
 
     @staticmethod
     def calc_Wilson_LL(V1, V2, a12, a21, T):
@@ -580,10 +586,8 @@ class Activity:
             gam2 = np.exp(x1*x1 * (self.A21 + 2*(self.A12 - self.A21)*x2))
             return gam1, gam2
         elif self.kind == "Wilson":
-            if T == "Not Given" and not self.Tbool:
+            if T == "Not Given":
                 raise ValueError("Wilson VLE needs a temperature for gamma.")
-            if T == "Not Given" and self.Tbool:
-                T = self.T
             L12, L21 = self.calc_Wilson_LL(self.V1, self.V2, self.a12, self.a21, T)
             der = (L12/(x1 + x2*L12) - L21/(x2 + x1*L21))
             ret1 = x1 + x2*L12
@@ -591,17 +595,26 @@ class Activity:
             gam1 = np.exp(x2*der)/ret1
             gam2 = np.exp(-x1*der)/ret2
             return gam1, gam2
+        elif self.kind == "vanLaar":
+            gam1 = np.exp(self.A12p *(1 + self.A12p*x1/self.A21p/x2)**-2)
+            gam2 = np.exp(self.A21p *(1 + self.A21p*x2/self.A12p/x1)**-2)
+            return gam1, gam2
         else:
             raise ValueError("Activity object has an incorrect value of kind.")
 
-    def calc_GERT(self, x1):
+    def calc_GERT(self, x1, T="Not Given"):
         x2 = 1-x1
-        gam1, gam2 = self.act.calc_gamma(x1, self.T)
+        gam1, gam2 = self.calc_gamma(x1, T)
         return x1*np.log(gam1) + x2*np.log(gam2)
+    def calc_GmixRT(self, x1):
+        x2 = 1-x1
+        GERT = self.calc_GERT(x1)
+        term = x1*np.log(x1) + x2*np.log(x2)
+        return GERT + term
 
 
 class vle:
-    def __init__(self, kind="baby", T="Not Given", P="Not Given"):
+    def __init__(self, kind, T="Not Given", P="Not Given"):
         """
         Class to handle binary VLE calculations. To generate a Txy diagram, pass P; for a Pxy diagram, pass T.
         Allowed kinds are baby, teen, and adult (pass a string).
@@ -678,7 +691,7 @@ class vle:
         else:
             return P1 + P2
 
-    def calc_Pxy(self, numPoints=101, x1=.5, T="Not Given"):
+    def calc_Pxy(self, numPoints=101, x1=.5, T="Not Given", xspan=(0,1)):
         if T == "Not Given" and not self.Tbool:
             raise ValueError("Cannot perform Pxy calc without T. Either initialize VLE with one, or pass to calc_Pxy.")
         elif T == "Not Given":
@@ -687,14 +700,14 @@ class vle:
             P, y1 = self.calc_P(x1, T, True)
             return P, x1, y1
         else:
-            x1_arr = np.linspace(0, 1, numPoints)
+            x1_arr = np.linspace(*xspan, numPoints)
             P_arr, y1_arr = self.calc_P(x1_arr, T, True)
             return P_arr, x1_arr, y1_arr
 
     # This function was, very mysteriously, crashing the Jupyter kernel without throwing any Python errors.
     # The end result is that I run a single fsolve across the entire x1 array, instead of individually.
     # I do not know why this works and the alternatives (commented out below) did not.
-    def calc_Txy(self, numPoints=101, x1=.5, P="Not Given"):
+    def calc_Txy(self, numPoints=101, x1=.5, P="Not Given", xspan=(0,1)):
         if P == "Not Given" and not self.Pbool:
             raise ValueError("Cannot perform Txy calc without P. Either initialize VLE with one, or pass to calc_Txy.")
         elif P == "Not Given":
@@ -705,7 +718,7 @@ class vle:
             P, y1 = self.calc_P(x1, T, True)
             return T, x1, y1
         else:
-            x1_arr = np.linspace(0, 1, numPoints)
+            x1_arr = np.linspace(*xspan, numPoints)
             T_arr = fsolve(lambda t: (self.calc_P(x1_arr, t*Tguess.units, False) - P).magnitude, x1_arr+Tguess.magnitude)*Tguess.units
             P_arr, y1_arr = self.calc_P(x1_arr, T_arr, True)
             return T_arr, x1_arr, y1_arr
@@ -859,5 +872,60 @@ class lle:
             print("Solver found an unphysical x1a or x1a:", x1a, x1b)
         return x1a, x1b
         
+class vlle:
+    def __init__(self, act_kind, act_params, Psat1, Psat2, T="Not Given"):
+        self.act_kind = act_kind
+        self.act_params = act_params
+        self.act = Activity(self.act_kind, self.act_params)
+        
+        self.Tbool=True
+        self.T = T
+        if self.T == "Not Given":
+            self.Tbool = False
+
+        self.lle = lle(*self.act.args)
+        self.vlea = vle("teen", T=T)
+        self.vleb = vle("teen", T=T)
+        self.vlea.set_act_model(*self.act.args)
+        self.vleb.set_act_model(*self.act.args)
+        self.vlea.set_Psat(Psat1, Psat2)
+        self.vleb.set_Psat(Psat1, Psat2)
 
 
+    def calc_lle(self, guess=(.1, .9)):
+        x1a, x1b = self.lle.calc_equilibrium(guess)
+        self.x1a = x1a
+        self.x1b = x1b
+        return x1a, x1b
+
+    def calc_Pys(self, T="Not Given"):
+        """
+        Assumes calc_lle has already been called.
+        """
+        if T == "Not Given" and not self.Tbool:
+            raise ValueError("Cannot perform P* or y* calc without T. Either initialize VLLE with one, or pass to calc_Pys.")
+        elif T == "Not Given":
+            T = self.T
+        x1a = self.x1a
+        x1b = self.x1b
+        x2a = 1-x1a
+        x2b = 1-x1b
+        Pa, y1a = self.vlea.calc_P(x1a, T, True)
+        Pb, y1b = self.vleb.calc_P(x1b, T, True)
+        self.Ps = (Pb*y1b) + (Pa*(1-y1a))
+        self.y1s = Pa/self.Ps
+        return self.Ps, self.y1s
+    def calc_Pxy(self, numPoints=101, x1=.5, T="Not Given"):
+        if T == "Not Given" and not self.Tbool:
+            raise ValueError("Cannot perform Pxy calc without T. Either initialize VLLE with one, or pass to calc_Pxy.")
+        elif T == "Not Given":
+            T = self.T
+        xa_num = int(np.ceil(100*self.x1a))+1
+        xb_num = 101 - xa_num
+        Pa_arr, x1a_arr, y1a_arr = self.vlea.calc_Pxy(numPoints=xa_num, xspan=(1e-6,self.x1a))
+        Pb_arr, x1b_arr, y1b_arr = self.vleb.calc_Pxy(numPoints=xb_num, xspan=(self.x1b, 1-1e-6))
+        
+        P_arr = np.concatenate((Pa_arr, Pb_arr))
+        x1_arr = np.concatenate((x1a_arr, x1b_arr))
+        y1_arr = np.concatenate((y1a_arr, y1b_arr))
+        return P_arr, x1_arr, y1_arr
