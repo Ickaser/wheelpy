@@ -292,7 +292,7 @@ class per_tab:
             else:
                 MW += cls.ptAll[s[0:pos]] * int(n)
         if pint:
-            MW *= un.g/un.mol
+            MW *= uReg.g/uReg.mol
         return MW
     
     
