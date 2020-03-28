@@ -231,6 +231,190 @@ class wben:
         dab = (T/Tref)**1.5 * (Pref/P) * dab_ref
         return dab
 
+class per_tab:
+    """
+    Contains three main helps:
+    ptAll is a dictionary by element symbol of molar weight.
+    MW(formula) takes a species formula and computes the molar weight accordingly.
+    All elements' molar weight can be referenced directly: per_tab.Cl, per_tab.Os, per_tab.C, etc.
+    """
+
+
+    ptAll = {'Ac': 227.0278, 'Ag': 107.8682, 'Al': 26.981539, 'Am': 243.0614, 'Ar': 39.948, 
+             'As': 74.92159, 'At': 209.9871, 'Au': 196.96654, 'B': 10.811, 'Ba': 137.327, 
+             'Be': 9.012182, 'Bh': 262.1229, 'Bi': 208.98037, 'Bk': 247.0703, 'Br': 79.904, 
+             'C': 12.011, 'Ca': 40.078, 'Cd': 112.411, 'Ce': 140.115, 'Cf': 251.0796, 
+             'Cl': 35.4527, 'Cm': 247.0703, 'Co': 58.9332, 'Cr': 51.9961, 'Cs': 132.90543, 
+             'Cu': 63.546, 'Db': 262.1138, 'Ds': 269.0, 'Dy': 162.5, 'Er': 167.26, 'Es': 252.0829, 
+             'Eu': 151.965, 'F': 18.9984032, 'Fe': 55.847, 'Fm': 257.0951, 'Fr': 223.0197, 
+             'Ga': 69.723, 'Gd': 157.25, 'Ge': 72.61, 'H': 1.00794, 'He': 4.002602, 'Hf': 178.49, 
+             'Hg': 200.59, 'Ho': 164.93032, 'Hs': 265.0, 'I': 126.90447, 'In': 114.82, 
+             'Ir': 192.22, 'K': 39.0983, 'Kr': 83.8, 'La': 138.9055, 'Li': 6.941, 'Lr': 260.1053, 
+             'Lu': 174.967, 'Md': 258.0986, 'Mg': 24.305, 'Mn': 54.93805, 'Mo': 95.94, 
+             'Mt': 266.0, 'N': 14.00674, 'Na': 22.989768, 'Nb': 92.90638, 'Nd': 144.24, 
+             'Ne': 20.1797, 'Ni': 58.69, 'No': 259.1009, 'Np': 237.0482, 'O': 15.9994, 
+             'Os': 190.2, 'P': 30.973762, 'Pa': 231.0359, 'Pb': 207.2, 'Pd': 106.42, 
+             'Pm': 146.9151, 'Po': 208.9824, 'Pr': 140.90765, 'Pt': 195.08, 'Pu': 244.0642, 
+             'Ra': 226.0254, 'Rb': 85.4678, 'Re': 186.207, 'Rf': 261.1087, 'Rg': 272.0, 
+             'Rh': 102.9055, 'Rn': 222.0176, 'Ru': 101.07, 'S': 32.066, 'Sb': 121.75, 
+             'Sc': 44.95591, 'Se': 78.96, 'Sg': 263.1182, 'Si': 28.0855, 'Sm': 150.36, 
+             'Sn': 118.71, 'Sr': 87.62, 'Ta': 180.9479, 'Tb': 158.92534, 'Tc': 98.9063, 
+             'Te': 127.6, 'Th': 232.0381, 'Ti': 47.88, 'Tl': 204.3833, 'Tm': 168.93421, 
+             'U': 238.0289, 'Uub': 277.0, 'Uuh': None, 'Uuo': None, 'Uup': None, 
+             'Uug': None, 'Uus': None, 'Uut': None, 'V': 50.9415, 'W': 183.85, 'Xe': 131.29, 
+             'Y': 88.90585, 'Yb': 173.04, 'Zn': 65.39, 'Zr': 91.224}
+
+    @classmethod
+    def MW(cls, formula, pint=True):
+        """
+        Takes a species name, written as CH4O2, Cl2, C3H6Cl2, etc. (Atomic species capitalized as standard, followed by integer if necessary.)
+        Returns the molecular weight of the species.
+        """
+        f = formula
+        specNums = []
+        for i, l in enumerate(formula):
+            if l in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+                specNums.append(i)
+        elemList = [f[specNums[i]:specNums[i+1]] for i in range(len(specNums)-1)]
+        elemList.append(f[specNums[-1]:])
+
+        MW = 0
+        for s in elemList:
+            pos = 0
+            n = ""
+            for i in s:
+                if i.isdigit():
+                    n += i
+                else:
+                    pos += 1
+            if n == "":
+                MW += cls.ptAll[s]
+            else:
+                MW += cls.ptAll[s[0:pos]] * int(n)
+        if pint:
+            MW *= un.g/un.mol
+        return MW
+    
+    
+    Ac = 227.0278
+    Ag = 107.8682
+    Al = 26.981539
+    Am = 243.0614
+    Ar = 39.948
+    As = 74.92159
+    At = 209.9871
+    Au = 196.96654
+    B = 10.811
+    Ba = 137.327
+    Be = 9.012182
+    Bh = 262.1229
+    Bi = 208.98037
+    Bk = 247.0703
+    Br = 79.904
+    C = 12.011
+    Ca = 40.078
+    Cd = 112.411
+    Ce = 140.115
+    Cf = 251.0796
+    Cl = 35.4527
+    Cm = 247.0703
+    Co = 58.9332
+    Cr = 51.9961
+    Cs = 132.90543
+    Cu = 63.546
+    Db = 262.1138
+    Ds = 269.0
+    Dy = 162.5
+    Er = 167.26
+    Es = 252.0829
+    Eu = 151.965
+    F = 18.9984032
+    Fe = 55.847
+    Fm = 257.0951
+    Fr = 223.0197
+    Ga = 69.723
+    Gd = 157.25
+    Ge = 72.61
+    H = 1.00794
+    He = 4.002602
+    Hf = 178.49
+    Hg = 200.59
+    Ho = 164.93032
+    Hs = 265.0
+    I = 126.90447
+    In = 114.82
+    Ir = 192.22
+    K = 39.0983
+    Kr = 83.8
+    La = 138.9055
+    Li = 6.941
+    Lr = 260.1053
+    Lu = 174.967
+    Md = 258.0986
+    Mg = 24.305
+    Mn = 54.93805
+    Mo = 95.94
+    Mt = 266.0
+    N = 14.00674
+    Na = 22.989768
+    Nb = 92.90638
+    Nd = 144.24
+    Ne = 20.1797
+    Ni = 58.69
+    No = 259.1009
+    Np = 237.0482
+    O = 15.9994
+    Os = 190.2
+    P = 30.973762
+    Pa = 231.0359
+    Pb = 207.2
+    Pd = 106.42
+    Pm = 146.9151
+    Po = 208.9824
+    Pr = 140.90765
+    Pt = 195.08
+    Pu = 244.0642
+    Ra = 226.0254
+    Rb = 85.4678
+    Re = 186.207
+    Rf = 261.1087
+    Rg = 272.0
+    Rh = 102.9055
+    Rn = 222.0176
+    Ru = 101.07
+    S = 32.066
+    Sb = 121.75
+    Sc = 44.95591
+    Se = 78.96
+    Sg = 263.1182
+    Si = 28.0855
+    Sm = 150.36
+    Sn = 118.71
+    Sr = 87.62
+    Ta = 180.9479
+    Tb = 158.92534
+    Tc = 98.9063
+    Te = 127.6
+    Th = 232.0381
+    Ti = 47.88
+    Tl = 204.3833
+    Tm = 168.93421
+    U = 238.0289
+    Uub = 277.0
+    Uuh = None
+    Uuo = None
+    Uup = None
+    Uug = None
+    Uus = None
+    Uut = None
+    V = 50.9415
+    W = 183.85
+    Xe = 131.29
+    Y = 88.90585
+    Yb = 173.04
+    Zn = 65.39
+         
+
 # from iapws import IAPWS97
 # 
 # class Steam:
