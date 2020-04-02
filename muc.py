@@ -1,6 +1,9 @@
 #MUC: modules, units, constants (and properties, now)
 import pint
 import numpy as np
+import wheelpy.knotts.waterproperties as wat
+import wheelpy.knotts.airproperties as air
+import wheelpy.knotts.benzeneproperties as ben
 
 uReg = pint.UnitRegistry()
 uReg.define("ppm=mg/kg")
@@ -88,9 +91,6 @@ def ivp_wrapper(ivp, y_dim, t_unit):
 # -----------------------------
 # Dr. Knott's property files
 
-import wheelpy.props.waterproperties as wat
-import wheelpy.props.airproperties as air
-import wheelpy.props.benzeneproperties as ben
 
 class wwat:
     """
