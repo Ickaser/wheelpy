@@ -544,63 +544,94 @@ class mixfit:
         return self.M2b_nondim(x1)
 
 class Activity:
-    def __init__(self, kind, params):
+    def __init__(self, kind, params, phase="l"):
         """
-        kind: 'mrg1', 'mrg2', 'Wilson', 'vanLaar'
+        kind: kind of activity model
+            For phase='l' : 'mrg1', 'mrg2', 'Wilson', 'vanLaar'
+            For phase='s' : '1'
+            For phase='g' : 'ig', 'im' . 'ig' indicates ideal gas, 'im' indicates ideal mixture but nonideal gas
         params: tuple of parameters to unpack. 
             For mrg1: A
             For mrg2: A12, A21
             For Wilson: a12, a21, V1, V2. L12 and L21 are computed by calc_gamma. (L for \Lambda)
             For vanLaar: A12', A21'
+        phase: defaults to l, for compatibility with older code.
         No returns.
         """
         self.kind = kind
         self.args = (kind, params)
-        if self.kind == "mrg1":
-            self.A = params
-        elif self.kind == "mrg2":
-            self.A12, self.A21 = params
-        elif self.kind == "Wilson":
-            self.V1, self.V2, self.a12, self.a21 = params
-        elif self.kind == "vanLaar":
-            self.A12p, self.A21p = params
+        self.phase = phase
+        if self.phase == "l":
+            if self.kind == "mrg1":
+                self.A = params
+                self.calc_gamma = self.calc_gamma_mrg1
+            elif self.kind == "mrg2":
+                self.A12, self.A21 = params
+                self.calc_gamma = self.calc_gamma_mrg2
+            elif self.kind == "Wilson":
+                self.V1, self.V2, self.a12, self.a21 = params
+                self.calc_gamma = self.calc_gamma_Wilson
+            elif self.kind == "vanLaar":
+                self.A12p, self.A21p = params
+                self.calc_gamma = self.calc_gamma_vanLaar
+            else:
+                raise ValueError("Invalid type of activity model.")
+        elif self.phase == "s":
+            if self.kind == "ig":
+                raise NotImplementedError("Activity model not yet implemented: " + self.kind)
+            if self.kind == "im":
+                raise NotImplementedError("Activity model not yet implemented: " + self.kind)
+            else:
+                raise ValueError("Invalid type of activity model.")
+        elif self.phase == "g":
+            if self.kind == "1":
+                self.calc_gamma = self.calc_gamma_s1
+                raise NotImplementedError("Activity model not yet implemented: " + self.kind)
+            else:
+                raise ValueError("Invalid type of activity model.")
         else:
-            raise ValueError("Invalid type of activity model.")
+            raise ValueError("Invalid phase passed to initialize activity model.")
 
+    def calc_gamma_mrg1(self, x1, T="Not Given"):
+        x2 = 1-x1
+        gam1 = np.exp(x2*x2*self.A)
+        gam2 = np.exp(x1*x1*self.A)
+        return gam1, gam2
+
+    def calc_gamma_mrg2(self, x1, T="Not Given"):
+        x2 = 1-x1
+        gam1 = np.exp(x2*x2 * (self.A12 + 2*(self.A21 - self.A12)*x1))
+        gam2 = np.exp(x1*x1 * (self.A21 + 2*(self.A12 - self.A21)*x2))
+        return gam1, gam2
+
+    def calc_gamma_Wilson(self, x1, T="Not Given"):
+        if T == "Not Given":
+            raise ValueError("Wilson VLE needs a temperature for gamma.")
+        x2 = 1-x1
+        L12, L21 = self.calc_Wilson_LL(self.V1, self.V2, self.a12, self.a21, T)
+        der = (L12/(x1 + x2*L12) - L21/(x2 + x1*L21))
+        ret1 = x1 + x2*L12
+        ret2 = x2 + x1*L21
+        gam1 = np.exp(x2*der)/ret1
+        gam2 = np.exp(-x1*der)/ret2
+        return gam1, gam2
     @staticmethod
     def calc_Wilson_LL(V1, V2, a12, a21, T):
         L12 = V2/V1 * np.exp(-a12/muc.R/T)
         L21 = V1/V2 * np.exp(-a21/muc.R/T)
         return L12, L21
 
-    def calc_gamma(self, x1, T="Not Given"):
-        """
-        Takes x1 and optionally T; returns (gam1, gam2).
-        T required for Wilson equation; not used for Margules.
-        """
+    def calc_gamma_vanLaar(self, x1, T="Not Given"):
         x2 = 1-x1
-        if self.kind == "mrg1":
-            raise NotImplementedError("Margules 1-paramter is not implemented.")
-        elif self.kind == "mrg2":
-            gam1 = np.exp(x2*x2 * (self.A12 + 2*(self.A21 - self.A12)*x1))
-            gam2 = np.exp(x1*x1 * (self.A21 + 2*(self.A12 - self.A21)*x2))
-            return gam1, gam2
-        elif self.kind == "Wilson":
-            if T == "Not Given":
-                raise ValueError("Wilson VLE needs a temperature for gamma.")
-            L12, L21 = self.calc_Wilson_LL(self.V1, self.V2, self.a12, self.a21, T)
-            der = (L12/(x1 + x2*L12) - L21/(x2 + x1*L21))
-            ret1 = x1 + x2*L12
-            ret2 = x2 + x1*L21
-            gam1 = np.exp(x2*der)/ret1
-            gam2 = np.exp(-x1*der)/ret2
-            return gam1, gam2
-        elif self.kind == "vanLaar":
-            gam1 = np.exp(self.A12p *(1 + self.A12p*x1/self.A21p/x2)**-2)
-            gam2 = np.exp(self.A21p *(1 + self.A21p*x2/self.A12p/x1)**-2)
-            return gam1, gam2
-        else:
-            raise ValueError("Activity object has an incorrect value of kind.")
+        gam1 = np.exp(self.A12p *(1 + self.A12p*x1/self.A21p/x2)**-2)
+        gam2 = np.exp(self.A21p *(1 + self.A21p*x2/self.A12p/x1)**-2)
+        return gam1, gam2
+
+    def calc_gamma_s1(self, x1, T="Not Given"):
+        return 1, 1
+    
+    def calc_gamma_ig(self, y1, T="Not Given"):
+        pass
 
     def calc_GERT(self, x1, T="Not Given"):
         x2 = 1-x1
@@ -929,3 +960,28 @@ class vlle:
         x1_arr = np.concatenate((x1a_arr, x1b_arr))
         y1_arr = np.concatenate((y1a_arr, y1b_arr))
         return P_arr, x1_arr, y1_arr
+
+
+# Class loosely based on form of mixrn.Reaction
+class reac_equil:
+    """
+    As of 2 April 2020, class is loosely based on mixrxn.Reaction class, but not actually dependent.
+    """
+    def __init__(self, names, nus):
+        """
+        Takes list of stoich. coefficients and list of species names. Stores values.
+        """
+        self.names = names
+        self.act = {}
+        self.nu = {}
+        for i, n in enumerate(names):
+            self.nu[n] = nus[i]
+            self.act[n] = Species(n)
+    def set_act_model(self, spec, phase, params):
+        """
+        Arguments: species name, phase, params
+        Phase: either "s", "g", or "l"
+        """
+
+    def calc_Qa(T, P):
+        pass
