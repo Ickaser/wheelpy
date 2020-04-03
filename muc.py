@@ -29,10 +29,16 @@ def wgtInterp(x, xa, xb, ya, yb):
     w = (x - xa)/(xb-xa)
     return w*yb + (1-w)*ya
 
-def valprint(name, var, unit=False, fmt='.3f'):
-    if unit:
+def valprint(name, var, unit=None, fmt='.3f'):
+    if unit is not None:
         var = var.to(unit)
     print(f'{name} = {var:{fmt}}')
+
+def dictprint(prefix, dct, unit=None, fmt='.3f'):
+    print(prefix)
+    keys = dct.keys()
+    for key in keys:
+        valprint(key, dct[key], unit, fmt)
 
 def list_unit(lis):
     unit = lis[0].units
