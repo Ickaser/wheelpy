@@ -1,7 +1,7 @@
 import wheelpy.muc as muc
 un = muc.uReg
 R = muc.R
-from scipy.optimize import fsolve, curve_fit
+from scipy.optimize import fsolve, curve_fit, root
 from scipy.integrate import quad
 import numpy as np
 
@@ -340,7 +340,7 @@ class EOS:
 class calc:
 
     @staticmethod
-    def book_Cp(T, ABCD, pint=True):
+    def book_CpR(T, ABCD, pint=True):
         """
         Provide T in K.
         Takes coefficients ABCD in an iterable and unpacks them; should all be dimensionless.
@@ -550,11 +550,13 @@ class Activity:
             For phase='l' : 'mrg1', 'mrg2', 'Wilson', 'vanLaar'
             For phase='s' : '1'
             For phase='g' : 'ig', 'im' . 'ig' indicates ideal gas, 'im' indicates ideal mixture but nonideal gas
-        params: tuple of parameters to unpack. 
-            For mrg1: A
-            For mrg2: A12, A21
-            For Wilson: a12, a21, V1, V2. L12 and L21 are computed by calc_gamma. (L for \Lambda)
-            For vanLaar: A12', A21'
+        params: single parameter or tuple of parameters to unpack. 
+            mrg1: A
+            mrg2: A12, A21
+            Wilson: a12, a21, V1, V2. #L12 and L21 are computed by calc_gamma12. (L for \Lambda)
+            vanLaar: A12', A21'
+            ig: P
+            im: *either* fi0, fugacity, *or* fugacity_func(T,P). Checks if callable to decide which.
         phase: defaults to l, for compatibility with older code.
         No returns.
         """
@@ -564,49 +566,83 @@ class Activity:
         if self.phase == "l":
             if self.kind == "mrg1":
                 self.A = params
-                self.calc_gamma = self.calc_gamma_mrg1
+                self.calc_gamma12 = self.calc_gamma12_mrg1
             elif self.kind == "mrg2":
                 self.A12, self.A21 = params
-                self.calc_gamma = self.calc_gamma_mrg2
+                self.calc_gamma12 = self.calc_gamma12_mrg2
             elif self.kind == "Wilson":
                 self.V1, self.V2, self.a12, self.a21 = params
-                self.calc_gamma = self.calc_gamma_Wilson
+                self.calc_gamma12 = self.calc_gamma12_Wilson
             elif self.kind == "vanLaar":
                 self.A12p, self.A21p = params
-                self.calc_gamma = self.calc_gamma_vanLaar
-            else:
-                raise ValueError("Invalid type of activity model.")
-        elif self.phase == "s":
-            if self.kind == "ig":
-                raise NotImplementedError("Activity model not yet implemented: " + self.kind)
-            if self.kind == "im":
-                raise NotImplementedError("Activity model not yet implemented: " + self.kind)
+                self.calc_gamma12 = self.calc_gamma12_vanLaar
             else:
                 raise ValueError("Invalid type of activity model.")
         elif self.phase == "g":
+            if self.kind == "ig":
+                self.calc_a = self.calc_a_ig
+                self.P = params
+            elif self.kind == "im":
+                self.calc_a = self.calc_a_im
+                self.f_func = callable(params)
+                if self.f_func:
+                    self.calc_f = params
+                else:
+                    self.fi0 = params
+            else:
+                raise ValueError("Invalid type of activity model.")
+        elif self.phase == "s":
             if self.kind == "1":
-                self.calc_gamma = self.calc_gamma_s1
-                raise NotImplementedError("Activity model not yet implemented: " + self.kind)
+                self.calc_a = self.calc_a_s1
             else:
                 raise ValueError("Invalid type of activity model.")
         else:
             raise ValueError("Invalid phase passed to initialize activity model.")
 
-    def calc_gamma_mrg1(self, x1, T="Not Given"):
+    def calc_a(self):
+        print("No function for activity was set, but it was called.")
+        raise NotImplementedError("Activity model not yet implemented: " + self.phase + self.kind)
+
+    # --------------------------------------------------
+    # Activity calculations (a, not gamma)
+    # Unlike the gamma calculations below, these do not assume a binary mixture, so they are performed
+    # for an individual species.
+    def calc_a_s1(self, xi, T="Not Used", P="Not Used"):
+        return 1
+    
+    def calc_a_ig(self, xi, T="Not Used", P="Not Used"):
+        a = xi*self.P/(1*un.bar)
+        return a
+
+    def calc_a_im(self, xi, T="Not Given", P="Not Given"):
+        if not self.f_func:
+            a = xi*self.fi0/(1*un.bar)
+            return a
+        else:
+            if T=="Not Given" or P=="Not Given":
+                raise ValueError("Missing either T or P for calculating fugacity.")
+            f = self.calc_f(T, P)
+            a = xi*f/(1*un.bar)
+            return a
+            
+    # ---------------------------------------------------------
+    # Activity coefficient models for binary mixture
+    # All functions return both gamma1 and gamma2.
+    def calc_gamma12_mrg1(self, x1):
         x2 = 1-x1
         gam1 = np.exp(x2*x2*self.A)
         gam2 = np.exp(x1*x1*self.A)
         return gam1, gam2
 
-    def calc_gamma_mrg2(self, x1, T="Not Given"):
+    def calc_gamma12_mrg2(self, x1):
         x2 = 1-x1
         gam1 = np.exp(x2*x2 * (self.A12 + 2*(self.A21 - self.A12)*x1))
         gam2 = np.exp(x1*x1 * (self.A21 + 2*(self.A12 - self.A21)*x2))
         return gam1, gam2
 
-    def calc_gamma_Wilson(self, x1, T="Not Given"):
-        if T == "Not Given":
-            raise ValueError("Wilson VLE needs a temperature for gamma.")
+    def calc_gamma12_Wilson(self, x1, T):
+        # if T == "Not Given":
+        #     raise ValueError("Wilson VLE needs a temperature for gamma.")
         x2 = 1-x1
         L12, L21 = self.calc_Wilson_LL(self.V1, self.V2, self.a12, self.a21, T)
         der = (L12/(x1 + x2*L12) - L21/(x2 + x1*L21))
@@ -621,28 +657,21 @@ class Activity:
         L21 = V1/V2 * np.exp(-a21/muc.R/T)
         return L12, L21
 
-    def calc_gamma_vanLaar(self, x1, T="Not Given"):
+    def calc_gamma12_vanLaar(self, x1):
         x2 = 1-x1
         gam1 = np.exp(self.A12p *(1 + self.A12p*x1/self.A21p/x2)**-2)
         gam2 = np.exp(self.A21p *(1 + self.A21p*x2/self.A12p/x1)**-2)
         return gam1, gam2
 
-    def calc_gamma_s1(self, x1, T="Not Given"):
-        return 1, 1
-    
-    def calc_gamma_ig(self, y1, T="Not Given"):
-        pass
-
-    def calc_GERT(self, x1, T="Not Given"):
+    def calc_GERT(self, *args):
         x2 = 1-x1
-        gam1, gam2 = self.calc_gamma(x1, T)
+        gam1, gam2 = self.calc_gamma12(*args)
         return x1*np.log(gam1) + x2*np.log(gam2)
     def calc_GmixRT(self, x1):
         x2 = 1-x1
         GERT = self.calc_GERT(x1)
         term = x1*np.log(x1) + x2*np.log(x2)
         return GERT + term
-
 
 class vle:
     def __init__(self, kind, T="Not Given", P="Not Given"):
@@ -685,7 +714,7 @@ class vle:
         params: tuple of parameters to unpack. 
             For mrg1: A
             For mrg2: A12, A21
-            For Wilson: a12, a21, V1, V2. L12 and L21 are computed by calc_gamma. (L for \Lambda)
+            For Wilson: a12, a21, V1, V2. L12 and L21 are computed by calc_gamma12. (L for \Lambda)
         No returns.
         Wraps the Activity initialization function, and calls it self.act.
         """
@@ -714,7 +743,7 @@ class vle:
         If calc_y is False, returns P_tot.
         """
         x2 = 1-x1
-        gam1, gam2 = self.act.calc_gamma(x1, T)
+        gam1, gam2 = self.act.calc_gamma12(x1, T)
         P1 = x1*self.Psat1(T) * gam1
         P2 = x2*self.Psat2(T) * gam2
         if calc_y:
@@ -891,8 +920,8 @@ class lle:
             raise ValueError("For Wilson activity, need a given temperature.")
         def sol_eqs(x1ab):
             x1a, x1b = x1ab
-            gam1a, gam2a = self.act.calc_gamma(x1a, T)
-            gam1b, gam2b = self.act.calc_gamma(x1b, T)
+            gam1a, gam2a = self.act.calc_gamma12(x1a, T)
+            gam1b, gam2b = self.act.calc_gamma12(x1b, T)
             x2a = 1-x1a
             x2b = 1-x1b
             eq1 = x1a*gam1a - x1b*gam1b
@@ -966,22 +995,148 @@ class vlle:
 class reac_equil:
     """
     As of 2 April 2020, class is loosely based on mixrxn.Reaction class, but not actually dependent.
+    To calculate an equilibrium, you need to first call:
+    set_n0, set_phases, set_act_model, set_G0, [set_H0]
+    set_n0 is called once, with a list.
+    set_phases is called once, with a list.
+    set_act_model is called for each species.
     """
     def __init__(self, names, nus):
         """
         Takes list of stoich. coefficients and list of species names. Stores values.
         """
         self.names = names
+        self.nspec = len(names)
+        if len(nus) != self.nspec:
+            raise ValueError("Wrong number of nu values for number of species.")
         self.act = {}
         self.nu = {}
         for i, n in enumerate(names):
             self.nu[n] = nus[i]
-            self.act[n] = Species(n)
-    def set_act_model(self, spec, phase, params):
+
+    def set_phases(self, phases):
+        if len(phases) != self.nspec:
+            raise ValueError("Wrong number of phases for number of species.")
+        self.phase = {}
+        for n, p in zip(self.names, phases):
+            self.phase[n] = p
+
+    def set_n0(self, n_list):
+        if len(n_list) != self.nspec:
+            raise ValueError("Wrong number of mole values for number of species.")
+        self.nn0 = {}
+        for nm, nn in zip(self.names, n_list):
+            self.nn0[nm] = nn
+        self.n0 = sum(n_list)
+
+    def set_act_model(self, spec, kind, params, phase="Not Given"):
         """
         Arguments: species name, phase, params
-        Phase: either "s", "g", or "l"
+        Phase: either 's', 'g', or 'l'
+        For kinds and params, see thermo.Activity class
         """
+        if phase == "Not Given":
+            phase = self.phase[spec]
+        self.act[spec] = Activity(kind, params, phase)
+        
+    def set_G0(self, G0rxn, Tref):
+        self.G0rxn = G0rxn
+        self.TGrf = Tref
+    def set_H0(self, H0rxn, Tref):
+        self.H0rxn = H0rxn
+        self.THrf = Tref
 
-    def calc_Qa(T, P):
-        pass
+    def calc_Ka(self, T="Not Given", DCpR_func="Not Given"):
+        self.K0 = np.exp(-self.G0rxn/muc.R/self.TGrf)
+        if T == "Not Given":
+            return self.K0
+        self.K1 = np.exp(self.H0rxn/muc.R/self.THrf*(1-self.THrf/T))
+        if DCpR_func == "Not Given":
+            return self.K0 * self.K1
+        int1 = quad(lambda t: (DCpR_func(t*un.K)).magnitude, self.THrf.to("K").magnitude, T.to("K").magnitude)[0]
+        int2 = quad(lambda t: (DCpR_func(t*un.K)/t).magnitude, self.THrf.to("K").magnitude, T.to("K").magnitude)[0]
+        self.K2 = np.exp(-1/T*int1*T.units + int2)
+        return self.K0 * self.K1 * self.K2
+
+    def calc_nn_phase(self, ext):
+        nn = {}
+        n = 0
+        n_phase = {"g":0, "s":0, "l":0}
+        for nm in self.names:
+            nn[nm] = self.nn0[nm] + self.nu[nm]*ext
+            n += nn[nm]
+            n_phase[self.phase[nm]] += nn[nm]
+        return nn, n_phase
+
+    def calc_nfrac(self, ext=None):
+        """
+        If no extent is given, uses the value from the last extent calculation
+        """
+        if ext is None:
+            ext = self.ext
+        nn, n_phase = self.calc_nn_phase(ext)
+        nfrac = {}
+        for nm in self.names:
+            # Compute separate mole fractions for each phase
+            nfrac[nm] = nn[nm] / n_phase[self.phase[nm]]
+        return nfrac
+
+    def calc_Qa(self, ext, TP=None, debug=False):
+        """
+        Takes ext (extent of reaction), T, P.
+        Returns Qa, the product of all activities raised to stoichiometric coefficients.
+        """
+        if TP is None:
+            passTP = False
+        else:
+            passTP = True
+        a = {}
+        Qa = 1
+        nfrac = self.calc_nfrac(ext)
+        for nm in self.names:
+            # nfrac[nm] = nn[nm] / n
+            if passTP:
+                a[nm] = self.act[nm].calc_a(nfrac[nm], *TP)
+            else:
+                a[nm] = self.act[nm].calc_a(nfrac[nm])
+            Qa *= a[nm]**self.nu[nm]
+        # print(nfrac, n_phase)
+        if not debug:
+            return Qa
+        else:
+            return Qa, nn, nfrac, a
+
+    def calc_ext(self, ext_guess, TP=None, DCpR_func=None, pint_strip=True):
+        if DCpR_func is not None:
+            Ka = self.calc_Ka(TP[0], DCpR_func)
+        elif TP is not None:
+            Ka = self.calc_Ka(TP[0])
+        else:
+            Ka = self.calc_Ka()
+        if pint_strip:
+            def sol_ext(ext):
+                ext *= ext_guess.units
+                Qa = self.calc_Qa(ext, TP)
+                # Ka = self.calc_Ka(T)
+                return (Ka - Qa).magnitude
+        else:
+            def sol_ext(ext):
+                Qa = self.calc_Qa(ext, TP)
+                # Ka = self.calc_Ka(T)
+                return (Ka - Qa)
+        ext = fsolve(sol_ext, ext_guess.magnitude)[0]*ext_guess.units
+        # ext = root(sol_ext, ext_guess.magnitude, method="anderson").x*ext_guess.units
+        if ext == ext_guess:
+            print("Careful, the fsolve for extent of reaction gave back the guess value.")
+        self.ext = ext
+        return ext
+            
+    def calc_X(self, spec):
+        """
+        Assumes calc_ext has already been called, and uses stored value for extent of reaction.
+        """
+        X = -self.nu[spec]*self.ext/self.nn0[spec]
+        return X
+
+
+
