@@ -486,6 +486,26 @@ class calc:
                 Bmix += nFracs[i]*nFracs[j]*Bij[i][j]
         return Bmix
 
+    @staticmethod
+    def multi_reac_equil(rxn_list, Ka_list, ext_guess, n0):
+        """
+        Function for calculating equilibrium of multiple reactions.
+        Arguments: rxn_list, Ka_list, ext_guess, n0
+        rxn_list is a list of reac_equil objects, which already have everything set (phase, activity) and have the same species in common (just different activities).
+        Ka_list is a list of Ka values for each reaction, at the appropriate temperature.
+        ext_guess is a list of guess values for the extent of reaction for each reaction. Pass without units; moles assumed.
+        n0 is the overall inlet feed, as a dictionary by species with mole units.
+        """
+        def sol_ee(ext_guess):
+            nn = {}
+            names = rxn_list[0].names
+            for nm in names:
+                nn[nm] = n0[nm] + sum([rx.nu[nm] * ex * un.mol for rx, ex in zip(rxn_list, ext_guess)])
+            Qa_list = [rxn.calc_Qa_nn(nn) for rxn in rxn_list]
+            eq_list = [(Ka - Qa).magnitude for Ka, Qa in zip(Ka_list, Qa_list)]
+            return eq_list
+        ext_list = fsolve(sol_ee, ext_guess) *un.mol
+        return ext_list
 
 class mixfit:
     def __init__(self, x1_arr, M_arr, curve_func="Not Given" ):
@@ -1027,6 +1047,13 @@ class reac_equil:
     Available calculations:
     calc_Qa(xi, TP)
     calc_Ka(T='Not Given', DCpR_func='Not Given')
+    calc_ext(ext_guess) runs a solver to compute equilibrium
+    calc_nn_phase(ext)
+    calc_nn(ext)
+    calc_nfrac(ext)
+    calc_X() assumes an extent already calculated
+
+    For multi-reaction equilibrium, use this class with thermo.calc.multi_reac_equil.
     """
     def __init__(self, names, nus):
         """
