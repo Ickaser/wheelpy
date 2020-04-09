@@ -544,7 +544,7 @@ class mixfit:
         return self.M2b_nondim(x1)
 
 class Activity:
-    def __init__(self, kind, params, phase="l"):
+    def __init__(self, kind, params, phase="l", index=1):
         """
         kind: kind of activity model
             For phase='l' : 'mrg1', 'mrg2', 'Wilson', 'vanLaar'
@@ -558,11 +558,13 @@ class Activity:
             ig: P
             im: *either* fi0, fugacity, *or* fugacity_func(T,P). Checks if callable to decide which.
         phase: defaults to l, for compatibility with older code.
+        index: defaults to 1. Used for binary liquid activities: should be either 1 or 2. At present assumes Poynting factor is 1.
         No returns.
         """
         self.kind = kind
         self.args = (kind, params)
         self.phase = phase
+        self.index = index
         if self.phase == "l":
             if self.kind == "mrg1":
                 self.A = params
@@ -578,6 +580,7 @@ class Activity:
                 self.calc_gamma12 = self.calc_gamma12_vanLaar
             else:
                 raise ValueError("Invalid type of activity model.")
+            self.calc_a = self.calc_a_liq
         elif self.phase == "g":
             if self.kind == "ig":
                 self.calc_a = self.calc_a_ig
@@ -624,17 +627,35 @@ class Activity:
             f = self.calc_f(T, P)
             a = xi*f/(1*un.bar)
             return a
+
+    def calc_a_liq(self, xi, T="Not Given", P="Not Used"):
+        if self.index ==1:
+            x1 = xi
+            x2 = 1-x1
+        elif self.index == 2:
+            x2 = xi
+            x1 = 1-x2
+        gamma1, gamma2 = self.calc_gamma12(x1, T=T)
+        Poynting = 1
+        if self.index == 1:
+            a = xi*gamma1*Poynting
+        elif self.index == 2:
+            a = xi*gamma2*Poynting
+        else:
+            raise ValueError("Index other than 1 or 2 passed for a binary mixture of liquids.")
+        return a
+        
             
     # ---------------------------------------------------------
     # Activity coefficient models for binary mixture
     # All functions return both gamma1 and gamma2.
-    def calc_gamma12_mrg1(self, x1):
+    def calc_gamma12_mrg1(self, x1, T="Not Given"):
         x2 = 1-x1
         gam1 = np.exp(x2*x2*self.A)
         gam2 = np.exp(x1*x1*self.A)
         return gam1, gam2
 
-    def calc_gamma12_mrg2(self, x1):
+    def calc_gamma12_mrg2(self, x1, T="Not Given"):
         x2 = 1-x1
         gam1 = np.exp(x2*x2 * (self.A12 + 2*(self.A21 - self.A12)*x1))
         gam2 = np.exp(x1*x1 * (self.A21 + 2*(self.A12 - self.A21)*x2))
@@ -657,7 +678,7 @@ class Activity:
         L21 = V1/V2 * np.exp(-a21/muc.R/T)
         return L12, L21
 
-    def calc_gamma12_vanLaar(self, x1):
+    def calc_gamma12_vanLaar(self, x1, T="Not Given"):
         x2 = 1-x1
         gam1 = np.exp(self.A12p *(1 + self.A12p*x1/self.A21p/x2)**-2)
         gam2 = np.exp(self.A21p *(1 + self.A21p*x2/self.A12p/x1)**-2)
@@ -1000,6 +1021,12 @@ class reac_equil:
     set_n0 is called once, with a list.
     set_phases is called once, with a list.
     set_act_model is called for each species.
+    set_G0 is called once, with G0 and Tref.
+    set_H0 is called once, with H0 and Tref.
+
+    Available calculations:
+    calc_Qa(xi, TP)
+    calc_Ka(T='Not Given', DCpR_func='Not Given')
     """
     def __init__(self, names, nus):
         """
@@ -1013,6 +1040,11 @@ class reac_equil:
         self.nu = {}
         for i, n in enumerate(names):
             self.nu[n] = nus[i]
+
+    def set_extra_reac(self, names, nus):
+        """
+
+        """
 
     def set_phases(self, phases):
         if len(phases) != self.nspec:
@@ -1029,7 +1061,7 @@ class reac_equil:
             self.nn0[nm] = nn
         self.n0 = sum(n_list)
 
-    def set_act_model(self, spec, kind, params, phase="Not Given"):
+    def set_act_model(self, spec, kind, params, phase="Not Given", index="Not Given"):
         """
         Arguments: species name, phase, params
         Phase: either 's', 'g', or 'l'
@@ -1037,11 +1069,12 @@ class reac_equil:
         """
         if phase == "Not Given":
             phase = self.phase[spec]
-        self.act[spec] = Activity(kind, params, phase)
+        self.act[spec] = Activity(kind, params, phase, index)
         
     def set_G0(self, G0rxn, Tref):
         self.G0rxn = G0rxn
         self.TGrf = Tref
+
     def set_H0(self, H0rxn, Tref):
         self.H0rxn = H0rxn
         self.THrf = Tref
@@ -1105,6 +1138,33 @@ class reac_equil:
             return Qa
         else:
             return Qa, nn, nfrac, a
+
+    def calc_Qa_nn(self, nn, TP=None, debug=False):
+        """
+        Takes nn (dict of molar amounts), T, P.
+        Useful for manually constructing a separate solver, esp. for multiple reactions.
+        Returns Qa, the product of all activities raised to stoichiometric coefficients.
+        """
+        if TP is None:
+            passTP = False
+        else:
+            passTP = True
+        a = {}
+        Qa = 1
+        nfrac = {}
+        n_phase = {"g":0, "s":0, "l":0}
+        for nm in self.names:
+            n_phase[self.phase[nm]] += nn[nm]
+        for nm in self.names:
+            nfrac[nm] = nn[nm] / n_phase[self.phase[nm]]
+            if passTP:
+                a[nm] = self.act[nm].calc_a(nfrac[nm], *TP)
+            else:
+                a[nm] = self.act[nm].calc_a(nfrac[nm])
+            Qa *= a[nm]**self.nu[nm]
+        # print(nfrac, n_phase)
+        if not debug:
+            return Qa
 
     def calc_ext(self, ext_guess, TP=None, DCpR_func=None, pint_strip=True):
         if DCpR_func is not None:
