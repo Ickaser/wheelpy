@@ -501,8 +501,10 @@ class calc:
             names = rxn_list[0].names
             for nm in names:
                 nn[nm] = n0[nm] + sum([rx.nu[nm] * ex * un.mol for rx, ex in zip(rxn_list, ext_guess)])
-            Qa_list = [rxn.calc_Qa_nn(nn) for rxn in rxn_list]
-            eq_list = [(Ka - Qa).magnitude for Ka, Qa in zip(Ka_list, Qa_list)]
+            Qa_list = np.array([rxn.calc_Qa_nn(nn, split=True) for rxn in rxn_list])
+            Qap_list = Qa_list[:,0]
+            Qar_list = Qa_list[:,1]
+            eq_list = [(Ka/Qar - Qap).magnitude for Ka, Qap, Qar in zip(Ka_list, Qap_list, Qar_list)]
             return eq_list
         ext_list = fsolve(sol_ee, ext_guess) *un.mol
         return ext_list
@@ -1141,10 +1143,12 @@ class reac_equil:
             nfrac[nm] = nn[nm] / n_phase[self.phase[nm]]
         return nfrac
 
-    def calc_Qa(self, ext, TP=None, debug=False):
+    def calc_Qa(self, ext, TP=None, debug=False, split=False):
         """
         Takes ext (extent of reaction), T, P.
         Returns Qa, the product of all activities raised to stoichiometric coefficients.
+        Optional argument: split. Defaults False; if True, returns Qa_prod and Qa_reac separately.
+            (Helpful for making equations converge easier.)
         """
         if TP is None:
             passTP = False
@@ -1152,6 +1156,8 @@ class reac_equil:
             passTP = True
         a = {}
         Qa = 1
+        Qa_prod = 1
+        Qa_reac = 1
         nfrac = self.calc_nfrac(ext)
         for nm in self.names:
             # nfrac[nm] = nn[nm] / n
@@ -1160,17 +1166,30 @@ class reac_equil:
             else:
                 a[nm] = self.act[nm].calc_a(nfrac[nm])
             Qa *= a[nm]**self.nu[nm]
+            if split:
+                if self.nu[nm] < 0:
+                    Qa_reac *= a[nm]**self.nu[nm]
+                elif self.nu[nm] > 0:
+                    Qa_prod *= a[nm]**self.nu[nm] 
+                else:
+                    pass
+
         # print(nfrac, n_phase)
         if not debug:
-            return Qa
+            if not split:
+                return Qa
+            else:
+                return Qa_prod, Qa_reac
         else:
             return Qa, nn, nfrac, a
 
-    def calc_Qa_nn(self, nn, TP=None, debug=False):
+    def calc_Qa_nn(self, nn, TP=None, split=False, debug=False):
         """
         Takes nn (dict of molar amounts), T, P.
         Useful for manually constructing a separate solver, esp. for multiple reactions.
         Returns Qa, the product of all activities raised to stoichiometric coefficients.
+        Optional argument: split. Defaults False; if True, returns Qa_prod and Qa_reac separately.
+            (Helpful for making equations converge easier.)
         """
         if TP is None:
             passTP = False
@@ -1178,6 +1197,8 @@ class reac_equil:
             passTP = True
         a = {}
         Qa = 1
+        Qa_prod = 1
+        Qa_reac = 1
         nfrac = {}
         n_phase = {"g":0, "s":0, "l":0}
         for nm in self.names:
@@ -1189,9 +1210,21 @@ class reac_equil:
             else:
                 a[nm] = self.act[nm].calc_a(nfrac[nm])
             Qa *= a[nm]**self.nu[nm]
+            if split:
+                if self.nu[nm] < 0:
+                    Qa_reac *= a[nm]**self.nu[nm]
+                elif self.nu[nm] > 0:
+                    Qa_prod *= a[nm]**self.nu[nm] 
+                else:
+                    pass
         # print(nfrac, n_phase)
         if not debug:
-            return Qa
+            if not split:
+                return Qa
+            else:
+                return Qa_prod, Qa_reac
+        else:
+            return Qa, nn, nfrac, a
 
     def calc_ext(self, ext_guess, TP=None, DCpR_func=None, pint_strip=True):
         if DCpR_func is not None:
