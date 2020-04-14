@@ -1,6 +1,6 @@
+from iapws import IAPWS97
 import wheelpy.muc as muc
 uReg = muc.uReg
-from iapws import IAPWS97
 
 class Steam:
     """
