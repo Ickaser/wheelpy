@@ -1236,14 +1236,14 @@ class reac_equil:
         if pint_strip:
             def sol_ext(ext):
                 ext *= ext_guess.units
-                Qa = self.calc_Qa(ext, TP)
+                Qap, Qar = self.calc_Qa(ext, TP, split=True)
                 # Ka = self.calc_Ka(T)
-                return (Ka - Qa).magnitude
+                return (Ka/Qap - Qar).magnitude
         else:
             def sol_ext(ext):
-                Qa = self.calc_Qa(ext, TP)
+                Qap, Qar = self.calc_Qa(ext, TP, split=True)
                 # Ka = self.calc_Ka(T)
-                return (Ka - Qa)
+                return (Ka/Qap - Qar)
         ext = fsolve(sol_ext, ext_guess.magnitude)[0]*ext_guess.units
         # ext = root(sol_ext, ext_guess.magnitude, method="anderson").x*ext_guess.units
         if ext == ext_guess:
