@@ -21,6 +21,8 @@ m_p = 1*uReg.amu
 ϵ0 = 8.8541878128E-12 *uReg.C**2/uReg.J/uReg.m
 e = 1.602176634E-19*uReg.C
 sigma = 5.670374419E-8*uReg.W/uReg.m**2/uReg.K**4
+F = NA*e
+ptc = 1-np.exp(-1)
 
 def CtoK(temp):
     return uReg.Quantity(temp, uReg.degC).to(uReg.K)
@@ -85,15 +87,17 @@ def EE(fun, t_arr, y0, vec=True):
 def ivp_wrapper(ivp, t_dim, y_dim, wrap_args = ()):
     """
     For use with solve_ivp.
-    Takes an ivp function with pint units, y0 with pint units, and t-span with units.
+    Takes an ivp function with pint units, and t-span with units, and y0 with pint units.
     Returns a new ivp function, t_span, and y0 without units, to pass directly to solve_ivp. (Can be unpacked directly.)
+    Helpful note: the ivp function should behave as if it is vectorized, unpacking its arguments at the beginning and repacking returns at the end.
     """
     y_unit = [y.units for y in y_dim]
     t_unit = t_dim[0].units
     ret1 = ivp(0*t_unit, y_dim, *wrap_args)
-    def new_ivp(t, y_ndim, args=()):
+    def new_ivp(t_ndim, y_ndim, args=()):
+        t_dim = t_ndim*t_unit
         y_dim = [n * u for n, u in zip(y_ndim, y_unit)]
-        step = ivp(t, y_dim, *args)
+        step = ivp(t_dim, y_dim, *args)
         ret = [s.to(u/t_unit).magnitude for s, u in zip(step, y_unit)]
         return ret
     y_ndim = [y.magnitude for y in y_dim]

@@ -569,13 +569,14 @@ class Activity:
     def __init__(self, kind, params, phase="l", index=1):
         """
         kind: kind of activity model
-            For phase='l' : 'mrg1', 'mrg2', 'Wilson', 'vanLaar'
+            For phase='l' : 'mrg1', 'mrg2', 'Wilson', 'WilsonLL', 'vanLaar'
             For phase='s' : '1'
             For phase='g' : 'ig', 'im' . 'ig' indicates ideal gas, 'im' indicates ideal mixture but nonideal gas
         params: single parameter or tuple of parameters to unpack. 
             mrg1: A
             mrg2: A12, A21
             Wilson: a12, a21, V1, V2. #L12 and L21 are computed by calc_gamma12. (L for \Lambda)
+            WilsonLL: L12, L21 (L for \Lambda)
             vanLaar: A12', A21'
             ig: P
             im: *either* fi0, fugacity, *or* fugacity_func(T,P). Checks if callable to decide which.
@@ -597,6 +598,9 @@ class Activity:
             elif self.kind == "Wilson":
                 self.V1, self.V2, self.a12, self.a21 = params
                 self.calc_gamma12 = self.calc_gamma12_Wilson
+            elif self.kind == "WilsonLL":
+                self.L12, self.L21 = params
+                self.calc_gamma12 = self.calc_gamma12_WilsonLL
             elif self.kind == "vanLaar":
                 self.A12p, self.A21p = params
                 self.calc_gamma12 = self.calc_gamma12_vanLaar
@@ -699,6 +703,18 @@ class Activity:
         L12 = V2/V1 * np.exp(-a12/muc.R/T)
         L21 = V1/V2 * np.exp(-a21/muc.R/T)
         return L12, L21
+    def calc_gamma12_WilsonLL(self, x1, T):
+        # if T == "Not Given":
+        #     raise ValueError("Wilson VLE needs a temperature for gamma.")
+        x2 = 1-x1
+        L1 = self.L1
+        L2 = self.L2
+        der = (L12/(x1 + x2*L12) - L21/(x2 + x1*L21))
+        ret1 = x1 + x2*L12
+        ret2 = x2 + x1*L21
+        gam1 = np.exp(x2*der)/ret1
+        gam2 = np.exp(-x1*der)/ret2
+        return gam1, gam2
 
     def calc_gamma12_vanLaar(self, x1, T="Not Given"):
         x2 = 1-x1
