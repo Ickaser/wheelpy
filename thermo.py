@@ -703,12 +703,10 @@ class Activity:
         L12 = V2/V1 * np.exp(-a12/muc.R/T)
         L21 = V1/V2 * np.exp(-a21/muc.R/T)
         return L12, L21
-    def calc_gamma12_WilsonLL(self, x1, T):
-        # if T == "Not Given":
-        #     raise ValueError("Wilson VLE needs a temperature for gamma.")
+    def calc_gamma12_WilsonLL(self, x1, T="Not Given"):
         x2 = 1-x1
-        L1 = self.L1
-        L2 = self.L2
+        L12 = self.L12
+        L21 = self.L21
         der = (L12/(x1 + x2*L12) - L21/(x2 + x1*L21))
         ret1 = x1 + x2*L12
         ret2 = x2 + x1*L21
@@ -738,6 +736,7 @@ class vle:
         Class to handle binary VLE calculations. To generate a Txy diagram, pass P; for a Pxy diagram, pass T.
         Allowed kinds are baby, teen, and adult (pass a string).
         If using teen or adult, next call vle.set_act_model.
+        For all, call vle.set_Psat .
         """
         self.kind = kind
         self.Tbool=True

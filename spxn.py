@@ -15,7 +15,7 @@ pen_VP_coeff = (78.741, -5420.3, -8.8253, 9.6171e-6, 2)
 hex_VP_coeff = (104.65, -6995.5, -12.702, 1.2381e-5, 2)
 pen_Psat = lambda t: calc_Psat_arb(t, pen_VP_coeff)
 hex_Psat = lambda t: calc_Psat_arb(t, hex_VP_coeff)
-def calc_Psat_ant(T, coeff, unit="degC")
+def calc_Psat_ant(T, coeff, unit="degC"):
     """
     Antoine vapor pressure calculation.
     """
