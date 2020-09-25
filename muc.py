@@ -54,7 +54,7 @@ def ddx(fun, x, dx):
     dy = fun(x+dx) - fun(x-dx)
     return dy/2/dx
 
-def EE(fun, t_arr, y0, vec=True):
+def EE(fun, t_arr, y0, vec=True, args=()):
     """
     Explicit Euler using fun(t, y).
     t_arr array of times to use; dt equal throughout.
@@ -65,7 +65,7 @@ def EE(fun, t_arr, y0, vec=True):
         dt = t_arr[1]-t_arr[0]
         for t in t_arr:
             y_old = y_all[-1]
-            dydt = fun(t, y_old)
+            dydt = fun(t, y_old, *args)
             y_new = [y_o + dt*dy for y_o, dy in zip(y_old, dydt)]
             y_all.append(y_new)
             #transpose the lists
@@ -78,7 +78,7 @@ def EE(fun, t_arr, y0, vec=True):
         dt = t_arr[1]-t_arr[0]
         for t in t_arr:
             y_old = y_all[-1]
-            dydt = fun(t, y_old)
+            dydt = fun(t, y_old, *args)
             y_new = y_old + dt*dydt
             y_all.append(y_new)
             y_vars = list_unit(y_all)[:-1]
