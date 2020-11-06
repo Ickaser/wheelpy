@@ -825,7 +825,16 @@ class vle:
     # This function was, very mysteriously, crashing the Jupyter kernel without throwing any Python errors.
     # The end result is that I run a single fsolve across the entire x1 array, instead of individually.
     # I do not know why this works and the alternatives (commented out below) did not.
-    def calc_Txy(self, numPoints=101, x1=.5, P="Not Given", xspan=(0,1)):
+    def calc_Txy(self, x1=.5, numPoints=101, P="Not Given", xspan=(0,1)):
+        """
+        All arguments optional.
+        Args:
+            x1=.5: a single point at which to calculate Txy if numPoints==1
+            numPoints=101 , number of points at which Txy are calculated
+            P, required if VLE object not initialized with P
+            xspan=(0,1), a range of values along which to calculate Txy
+        If the solver is unstable, supply a guess value for T by initializing VLE object with T=...
+        """
         if P == "Not Given" and not self.Pbool:
             raise ValueError("Cannot perform Txy calc without P. Either initialize VLE with one, or pass to calc_Txy.")
         elif P == "Not Given":
