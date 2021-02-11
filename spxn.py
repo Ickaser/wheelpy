@@ -45,6 +45,7 @@ met_Ki_coeff = [-292860, 0, 8.2445, -.8951, 59.8465, 0]
 eth_Ki_coeff = [-600076.875, 0, 7.90595, -.84677, 42.94594, 0]
 pro_Ki_coeff = [-923484.6875, 0, 7.71725, -0.87871, 47.67624, 0]
 but_Ki_coeff = [-1280557, 0, 7.94986, -0.96455, 0, 0]
+isb_Ki_coeff = [-1166846, 0, 7.72668, -0.92213, 0, 0] # isobutane
 pen_Ki_coeff = [-1524891, 0, 7.33129, -.89143, 0, 0]
 hex_Ki_coeff = [-1778901, 0, 6.96783, -.84634, 0, 0]
 hep_Ki_coeff = [-2013803, 0, 6.52914, -.79543, 0, 0]
@@ -54,6 +55,7 @@ calc_K_met = lambda t, p: calc_Ki_arb(t, p, met_Ki_coeff)
 calc_K_eth = lambda t, p: calc_Ki_arb(t, p, eth_Ki_coeff)
 calc_K_pro = lambda t, p: calc_Ki_arb(t, p, pro_Ki_coeff)
 calc_K_but = lambda t, p: calc_Ki_arb(t, p, but_Ki_coeff)
+calc_K_isb = lambda t, p: calc_Ki_arb(t, p, isb_Ki_coeff)
 calc_K_pen = lambda t, p: calc_Ki_arb(t, p, pen_Ki_coeff)
 calc_K_hex = lambda t, p: calc_Ki_arb(t, p, hex_Ki_coeff)
 calc_K_hep = lambda t, p: calc_Ki_arb(t, p, hep_Ki_coeff)
@@ -95,7 +97,7 @@ def underwood(α_arr, F, z_arr, DxD_arr, dVf):
     α_arr an array relative volatilities; reference species has α=1. Array is sorted internally.
     """
     def calc_f(ϕ):
-        return np.sum(α_arr*F*z_arr/(α_arr-ϕ)).magnitude
+        return (np.sum(α_arr*F*z_arr/(α_arr-ϕ)) - dVf).magnitude
     α_sort = np.sort(α_arr)
     guess_vals = (α_sort[1:]+α_sort[:-1])/2
 #     guess_vals = α_sort+.1
@@ -113,6 +115,7 @@ def gilliland(LDmin, M, Nmin, Nfmin,):
     Arguments: LDmin, M, Nmin, Nfmin. M= (L/D) / (L/D)_min
     Nmin is minimum stages from Fenske, Nfmin is minimum stages from feed to distillate from Fenske
     Uses Liddle's 1986 fit to Gilliland's correlation.
+    Returns actual number of stages, estimated optimum feed stage
     """
     X = (M-1)/(1/LDmin + M)
     if 0 <= X and X<= .01:

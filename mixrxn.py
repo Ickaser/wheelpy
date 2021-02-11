@@ -24,7 +24,7 @@ class Species:
         self.Cp_coeff = coeff
         self.Cp_kind = coeff_kind
         if self.Cp_kind == 1:
-            self.Cp_order = len(self.Cp[self.names[0]])
+            self.Cp_order = len(self.Cp_coeff)
         self.Cp_const = False
 
     def calc_DH(self, T1, T2, pint_strip = False):
@@ -44,7 +44,7 @@ class Species:
         if self.Cp_const:
             Tarray = T2 - T1
         elif self.Cp_kind == 1:
-            Tarray = [(T2**i - T1**i)/i for i in range(1, self.Cp["order"]+1)]
+            Tarray = [(T2**i - T1**i)/i for i in range(1, self.Cp_order+1)]
         elif self.Cp_kind == 2:
             Tarray = [T2-T1, (T2*T2 - T1*T1)/2, (1/T2 - 1/T1)*-1]
         elif self.Cp_kind == 3:
@@ -262,10 +262,11 @@ class Mixture:
         return l, v
 
                 
-    def Extract(self, spec):
+    def Extract(self, spec, frac=None):
         """
-        Takes an iterable of species names.
+        Takes an iterable of species names, and optionally a list of target mole fractions which defaults to 1.
         Returns a new mixture, based on the mFlows, with only the species given as arguments.
+        If fractions are specified, a mass balance is solved 
         """
         newMix = {}
         for s in spec:
@@ -297,7 +298,7 @@ class Mixture:
             # for s in spec:
                 # newFlows[s] = self.mFlows[s] + other.mFlows[s]
             newMix = Mixture(spec, newFlows, sum(newFlows), kind = "mm")
-            newMix.fill()
+            newMix.fill(self.molar_fill)
             return newMix
         else:
             print("You added a mixture to something else.")
@@ -312,10 +313,24 @@ class Mixture:
             # for s in spec:
                 # newFlows[s] = self.mFlows[s] + other.mFlows[s]
             newMix = Mixture(spec, newFlows, sum(newFlows), kind = "mm")
-            newMix.fill()
+            newMix.fill(self.molar_fill)
             return newMix
         else:
             print("You subtracted something else from a mixture.")
+
+    def __mul__(self, other):
+        if isinstance(float(other), float):
+            spec = list(self.mFlows.keys())
+            if self.molar_fill:
+                newFlows = [self.nFlows.get(s, 0) * other for s in spec]
+                newMix = Mixture(spec, newFlows, sum(newFlows), kind = "nn")
+            else:
+                newFlows = [self.mFlows.get(s, 0) * other for s in spec]
+                newMix = Mixture(spec, newFlows, sum(newFlows), kind = "mm")
+            newMix.fill(self.molar_fill)
+            return newMix
+        else:
+            print("You multiplied a mixture by something that can't be cast to a float.")
 #---------------------------
     def set_Hf(self, Hf_list):
         for n, h in zip(self.names, Hf_list):
