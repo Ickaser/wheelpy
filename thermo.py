@@ -569,14 +569,17 @@ class Activity:
     def __init__(self, kind, params, phase="l", index=1):
         """
         kind: kind of activity model
-            For phase='l' : 'mrg1', 'mrg2', 'Wilson', 'WilsonLL', 'vanLaar'
+            For phase='l' : 'mrg1', 'mrg2', 'Wilson12', 'WilsonLL', 
+                            'Wilson123', 'vanLaar', 'NRTL'
             For phase='s' : '1'
             For phase='g' : 'ig', 'im' . 'ig' indicates ideal gas, 'im' indicates ideal mixture but nonideal gas
         params: single parameter or tuple of parameters to unpack. 
             mrg1: A
             mrg2: A12, A21
-            Wilson: a12, a21, V1, V2. #L12 and L21 are computed by calc_gamma12. (L for \Lambda)
+            Wilson12: a12, a21, V1, V2. #L12 and L21 are computed by calc_gamma12. (L for \Lambda)
             WilsonLL: L12, L21 (L for \Lambda)
+            Wilson123: Multicomponent Wilson, with LL directly passed.
+                For N=3, 3 tuples of length 2: (L12, L13), (L21, L23), (L31, L32)
             vanLaar: A12', A21'
             ig: P
             im: *either* fi0, fugacity, *or* fugacity_func(T,P). Checks if callable to decide which.
@@ -595,15 +598,26 @@ class Activity:
             elif self.kind == "mrg2":
                 self.A12, self.A21 = params
                 self.calc_gamma12 = self.calc_gamma12_mrg2
-            elif self.kind == "Wilson":
+            elif self.kind == "Wilson12":
                 self.V1, self.V2, self.a12, self.a21 = params
                 self.calc_gamma12 = self.calc_gamma12_Wilson
             elif self.kind == "WilsonLL":
                 self.L12, self.L21 = params
                 self.calc_gamma12 = self.calc_gamma12_WilsonLL
+            elif self.kind == "Wilson123":
+                self.Lij = []
+                for i, p in enumerate(params):
+                    p = list(p)
+                    p.insert(i, 1)
+                    self.Lij.append(p)
+                self.Lij = np.array(self.Lij)
+                self.calc_gamma_i = self.calc_gamma123_WilsonLL
             elif self.kind == "vanLaar":
                 self.A12p, self.A21p = params
                 self.calc_gamma12 = self.calc_gamma12_vanLaar
+            elif self.kind == "NRTL":
+                self.A12, self.A21, self.alpha12 = params
+                self.calc_gamma12 = self.calc_gamma12_NRTL
             else:
                 raise ValueError("Invalid type of activity model.")
             self.calc_a = self.calc_a_liq
@@ -713,11 +727,41 @@ class Activity:
         gam1 = np.exp(x2*der)/ret1
         gam2 = np.exp(-x1*der)/ret2
         return gam1, gam2
+    def calc_gamma123_WilsonLL(self, xi_arr, T="Not Given"):
+        """
+        Multicomponent Wilson 
+        Takes an array [x1, x2, ..., xn].
+        Returns [gam1, gam2, ..., gamn].
+        Took some time to work through array syntax here; be careful with modifications.
+        """
+        Lij = self.Lij
+        xjLij = xi_arr*Lij
+        xiLij = (xi_arr*Lij.T).T
+        n = len(xi_arr)
+        denom_k = np.sum(xjLij, axis=1) # Sum across j with axis 1
+        logterm = np.log(denom_k) # Sum across j with axis 1
+        sumterm = np.sum((xiLij.T/denom_k).T, axis=0) # Divide columnwise, sum through k
+        gam_i = np.exp(-logterm + 1 - sumterm)
+        return gam_i
 
     def calc_gamma12_vanLaar(self, x1, T="Not Given"):
         x2 = 1-x1
         gam1 = np.exp(self.A12p *(1 + self.A12p*x1/self.A21p/x2)**-2)
         gam2 = np.exp(self.A21p *(1 + self.A21p*x2/self.A12p/x1)**-2)
+        return gam1, gam2
+
+    def calc_gamma12_NRTL(self, x1, T):
+        # if T == "Not Given":
+        #     raise ValueError("Wilson VLE needs a temperature for gamma.")
+        x2 = 1-x1
+        tau12 = self.A12/muc.R/T
+        tau21 = self.A21/muc.R/T
+        G12 = np.exp(-self.alpha12 * tau12)
+        G21 = np.exp(-self.alpha12 * tau21)
+        ret1 = x1 + x2*G21
+        ret2 = x2 + x1*G12
+        gam1 = np.exp(x2*x2 * (tau21*(G21/ret1)**2 + tau12*G12/ret2/ret2) )
+        gam2 = np.exp(x1*x1 * (tau12*(G12/ret2)**2 + tau21*G21/ret1/ret1) )
         return gam1, gam2
 
     def calc_GERT(self, *args):
@@ -735,8 +779,13 @@ class vle:
         """
         Class to handle binary VLE calculations. To generate a Txy diagram, pass P; for a Pxy diagram, pass T.
         Allowed kinds are baby, teen, and adult (pass a string).
-        If using teen or adult, next call vle.set_act_model.
-        For all, call vle.set_Psat .
+        Constructs an object, which will store values and use them.
+        If using teen or adult, next call [vle_obj].set_act_model.
+        For all, call [vle_obj].set_Psat .
+        After setting up activities and Psat functions, call:
+        [vle_obj].calc_Pxy()
+        or 
+        [vle_obj].calc_Txy()
         """
         self.kind = kind
         self.Tbool=True
@@ -768,11 +817,10 @@ class vle:
             
     def set_act_model(self, kind, params):
         """
-        kind: 'mrg1', 'mrg2', or 'Wilson'.
+        kind: 'mrg1', 'mrg2','Wilson', etc.
         params: tuple of parameters to unpack. 
-            For mrg1: A
-            For mrg2: A12, A21
-            For Wilson: a12, a21, V1, V2. L12 and L21 are computed by calc_gamma12. (L for \Lambda)
+        For detailed info on implemented models and parameters to pass,
+            see help(thermo.Activity), and look at liquid models.
         No returns.
         Wraps the Activity initialization function, and calls it self.act.
         """
@@ -809,7 +857,17 @@ class vle:
         else:
             return P1 + P2
 
-    def calc_Pxy(self, numPoints=101, x1=.5, T="Not Given", xspan=(0,1)):
+    def calc_Pxy(self, numPoints=101, x1="Not Given", T="Not Given", xspan=(0,1)):
+        """
+        All arguments optional.
+        Args:
+            x1=.5: point or array of points at which to calculate Pxy
+            numPoints=101 , number of points at which Txy are calculated.
+                Ignored if an array x1 is passed to x1
+            T, required if VLE object not initialized with T
+            xspan=(0,1), limiting values between which to calculate Pxy
+        If the solver is unstable, supply a guess value for P by initializing VLE object with T=...
+        """
         if T == "Not Given" and not self.Tbool:
             raise ValueError("Cannot perform Pxy calc without T. Either initialize VLE with one, or pass to calc_Pxy.")
         elif T == "Not Given":
@@ -817,10 +875,13 @@ class vle:
         if numPoints == 1:
             P, y1 = self.calc_P(x1, T, True)
             return P, x1, y1
-        else:
+        elif type(x1) == type("Not Given"):
             x1_arr = np.linspace(*xspan, numPoints)
             P_arr, y1_arr = self.calc_P(x1_arr, T, True)
             return P_arr, x1_arr, y1_arr
+        else:
+            P_arr, y1_arr = self.calc_P(x1, T, True)
+            return P_arr, x1, y1_arr
 
     # This function was, very mysteriously, crashing the Jupyter kernel without throwing any Python errors.
     # The end result is that I run a single fsolve across the entire x1 array, instead of individually.
