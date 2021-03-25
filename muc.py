@@ -22,6 +22,7 @@ m_p = 1*uReg.amu
 e = 1.602176634E-19*uReg.C
 sigma = 5.670374419E-8*uReg.W/uReg.m**2/uReg.K**4
 F = NA*e
+g = 9.81 *uReg.m/uReg.s**2
 ptc = 1-np.exp(-1)
 
 def CtoK(temp):
